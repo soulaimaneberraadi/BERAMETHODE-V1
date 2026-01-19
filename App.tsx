@@ -226,7 +226,10 @@ export default function App() {
         <header className="bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4 py-2 shrink-0 z-50 shadow-md relative h-16 gap-4">
             
             {/* Logo */}
-            <div className="flex items-center gap-2 pr-6 border-r border-slate-800 mr-2 shrink-0">
+            <button 
+                onClick={() => setCurrentView('library')}
+                className="flex items-center gap-2 pr-6 border-r border-slate-800 mr-2 shrink-0 hover:opacity-80 transition-opacity"
+            >
                  <div className="text-white bg-slate-800 p-1.5 rounded-lg border border-slate-700">
                     <svg viewBox="0 0 512 512" className="w-5 h-5 fill-current text-white" xmlns="http://www.w3.org/2000/svg">
                         <path d="M110 420 L230 80 H150 L30 420 H110 Z" />
@@ -234,7 +237,7 @@ export default function App() {
                     </svg>
                  </div>
                  <span className="font-black text-lg text-white tracking-tight hidden sm:inline-block">BERAMETHODE</span>
-            </div>
+            </button>
 
             {/* Responsive Menu */}
             <nav 
