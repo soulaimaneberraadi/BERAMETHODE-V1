@@ -112,10 +112,6 @@ export default function Gamme({
 
   const [clipboard, setClipboard] = useState<{ op: Operation | null; mode: 'copy' | 'cut' } | null>(null);
 
-  // Autocomplete State
-  const [activeSuggestionOpId, setActiveSuggestionOpId] = useState<string | null>(null);
-  const [currentWordContext, setCurrentWordContext] = useState<{word: string, suffix: string, textBefore: string} | null>(null);
-
   // Combine Vocabularies (Memoized)
   const fullVocabulary = useMemo(() => [...VOCABULARY, ...userVocabulary], [userVocabulary]);
 
@@ -237,9 +233,6 @@ export default function Gamme({
                   guideName: suggested.name 
               };
           } else {
-              // REQUIREMENT: Clear if no suitable guide found ("mknxi 5so gid my3mlox")
-              // If we already had a guide manually set, this will clear it if the logic deems it unnecessary.
-              // To respect manual overrides, we could check if it was manually set, but "Auto" implies a full reset/recalc.
               return {
                   ...op,
                   guideId: undefined,
@@ -255,11 +248,9 @@ export default function Gamme({
       const searchLower = guideSearch.toLowerCase();
       const targetMachine = (showGuideModal.machineName || '').toLowerCase();
       
-      // Strict filter for machine type if possible, otherwise loose
       return guides.filter(g => {
           const matchSearch = (g.name || '').toLowerCase().includes(searchLower) || (g.category || '').toLowerCase().includes(searchLower);
           
-          // Machine matching logic (simple includes for now)
           const gMachine = (g.machineType || '').toLowerCase();
           const matchMachine = targetMachine ? (gMachine.includes(targetMachine) || targetMachine.includes(gMachine) || gMachine.includes('piqueuse')) : true;
           
@@ -287,10 +278,10 @@ export default function Gamme({
     
     if (name.includes('bouton') || name.includes('botonière')) return 4/60; 
     if (name.includes('bride')) return 4/60; 
-    return 0.15; // Generic 9s
+    return 0.15; 
   };
 
-  // --- CALCULATION LOGIC (METHOD TEXTILE) ---
+  // --- CALCULATION LOGIC ---
   const calculateOpTimes = (op: Partial<Operation>, machineId: string, machinesList: Machine[]) => {
     let machine = machinesList.find(m => m.id === machineId);
     if (!machine && op.machineName) {
@@ -337,7 +328,6 @@ export default function Gamme({
         }
 
         if (T_Manuel === 0 && T_Machine > 0) {
-             // Use 0.18 as default manual handling time if calculation is automatic
              if (L > 0 || isCounterMachine) {
                  T_Manuel = 0.18;
              }
@@ -346,11 +336,10 @@ export default function Gamme({
 
     const T_Total_Calc = (T_Machine + T_Manuel) * Majoration;
 
-    // --- FABRIC COMPENSATION LOGIC (NEW) ---
     let fabricPenalty = 0;
     if (fabricSettings.enabled) {
         const penaltySec = fabricSettings.values[fabricSettings.selected];
-        fabricPenalty = penaltySec / 60; // Convert Seconds to Minutes
+        fabricPenalty = penaltySec / 60; 
     }
 
     const T_Total = (op.forcedTime !== undefined && op.forcedTime !== null) 
@@ -359,16 +348,6 @@ export default function Gamme({
 
     return { T_Total, T_Machine, T_Manuel, isMachine, isCounterMachine };
   };
-
-  // --- SUMMARY CALCULATIONS ---
-  const totalMin = operations.reduce((sum, op) => sum + (op.time || 0), 0);
-  const tempsArticle = totalMin * 1.20; 
-
-  const prodDay100 = tempsArticle > 0 ? (presenceTime * numWorkers) / tempsArticle : 0;
-  const prodDayEff = prodDay100 * (efficiency / 100);
-  const hours = presenceTime / 60;
-  const prodHour100 = hours > 0 ? prodDay100 / hours : 0;
-  const prodHourEff = hours > 0 ? prodDayEff / hours : 0;
 
   // --- ACTIONS ---
   const addOperation = () => {
@@ -468,17 +447,15 @@ export default function Gamme({
               if (clipboard?.op) {
                   const pastedOp = { 
                       ...clipboard.op, 
-                      id: newOps[idx].id, // Maintain ID of target row to overwrite
+                      id: newOps[idx].id, 
                       order: newOps[idx].order 
                   };
                   newOps[idx] = pastedOp;
                   
-                  // Recalculate
                   const { T_Total } = calculateOpTimes(pastedOp, pastedOp.machineId || '', machines);
                   newOps[idx].time = T_Total;
 
                   if (clipboard.mode === 'cut') {
-                      // Remove original if cut. Need to find it by ID from clipboard
                       const originalIdx = newOps.findIndex(o => o.id === clipboard.op!.id);
                       if (originalIdx !== -1 && originalIdx !== idx) {
                           newOps.splice(originalIdx, 1);
@@ -505,13 +482,10 @@ export default function Gamme({
   // --- AUTOCOMPLETE LOGIC ---
   const handleDescriptionChange = (e: React.ChangeEvent<HTMLInputElement>, opId: string) => {
       const val = e.target.value;
-      const op = operations.find(o => o.id === opId);
       
       setOperations(prev => prev.map(o => {
           if (o.id !== opId) return o;
           
-          // SMART GUIDE SUGGESTION ON DESCRIPTION CHANGE
-          // Only if guide isn't manually set yet (or is empty)
           let newGuideId = o.guideId;
           let newGuideName = o.guideName;
           
@@ -525,82 +499,15 @@ export default function Gamme({
 
           const updatedOp = { ...o, description: val, guideId: newGuideId, guideName: newGuideName };
           
-          // Recalculate time just in case guide influences it (future proofing)
           const { T_Total } = calculateOpTimes(updatedOp, updatedOp.machineId || '', machines);
           updatedOp.time = T_Total;
           
           return updatedOp;
       }));
-
-      if (!isAutocompleteEnabled) return;
-
-      const cursor = e.target.selectionStart || val.length;
-      let start = val.lastIndexOf(' ', cursor - 1) + 1;
-      let end = val.indexOf(' ', cursor);
-      if (end === -1) end = val.length;
-
-      const currentWord = val.substring(start, end);
-      const textBefore = val.substring(0, start);
-
-      if (currentWord.trim().length > 0) {
-          // Safety Check: Added (w || '') to prevent crash
-          const match = fullVocabulary.find(w => 
-              (w || '').toLowerCase().startsWith(currentWord.toLowerCase()) &&
-              (w || '').toLowerCase() !== currentWord.toLowerCase()
-          );
-          
-          if (match) {
-              const suffix = match.slice(currentWord.length);
-              setActiveSuggestionOpId(opId);
-              setCurrentWordContext({
-                  word: currentWord,
-                  suffix: suffix,
-                  textBefore: textBefore + currentWord
-              });
-          } else {
-              setActiveSuggestionOpId(null);
-              setCurrentWordContext(null);
-          }
-      } else {
-          setActiveSuggestionOpId(null);
-          setCurrentWordContext(null);
-      }
-  };
-
-  // Apply suggestion when user hits Enter/Tab
-  const confirmSuggestion = (opId: string) => {
-      if (activeSuggestionOpId !== opId || !currentWordContext) return;
-      
-      setOperations(prev => prev.map(op => {
-          if (op.id !== opId) return op;
-          const fullWord = currentWordContext.word + currentWordContext.suffix;
-          const partialLen = currentWordContext.word.length;
-          const prefix = currentWordContext.textBefore.slice(0, -partialLen);
-          const newDescription = prefix + fullWord + " "; 
-          return { ...op, description: newDescription };
-      }));
-
-      setActiveSuggestionOpId(null);
-      setCurrentWordContext(null);
-  };
-
-  const handleDescriptionKeyDown = (e: React.KeyboardEvent, opId: string) => {
-      if (activeSuggestionOpId === opId && currentWordContext) {
-          if (e.key === 'Enter' || e.key === 'Tab' || e.key === 'ArrowRight' || e.key === ' ') {
-              e.preventDefault();
-              confirmSuggestion(opId);
-          } else if (e.key === 'Escape') {
-              setActiveSuggestionOpId(null);
-              setCurrentWordContext(null);
-          }
-      }
   };
 
   // --- SELF LEARNING LOGIC ---
   const handleDescriptionBlur = (description: string) => {
-      setActiveSuggestionOpId(null);
-      setCurrentWordContext(null);
-
       if (!description) return;
 
       const words = description.split(/\s+/);
@@ -609,7 +516,6 @@ export default function Gamme({
       words.forEach(w => {
           const cleanWord = w.trim();
           if (cleanWord.length > 2 && isNaN(Number(cleanWord))) {
-              // Safety Check: Added (v || '')
               const exists = fullVocabulary.some(v => (v || '').toLowerCase() === cleanWord.toLowerCase());
               if (!exists) {
                   newWords.push(cleanWord);
@@ -635,7 +541,7 @@ export default function Gamme({
   const updateGuideName = (opId: string, name: string) => {
       setOperations(prev => prev.map(op => {
           if (op.id !== opId) return op;
-          return { ...op, guideName: name, guideId: undefined }; // Clearing ID as it's now manual
+          return { ...op, guideName: name, guideId: undefined }; 
       }));
   };
 
@@ -655,7 +561,6 @@ export default function Gamme({
         forcedTime: undefined 
       };
 
-      // SMART GUIDE SUGGESTION ON MACHINE CHANGE
       if (!updatedOp.guideName || updatedOp.guideName === '') {
           const suggested = findBestGuide(updatedOp.description, value);
           if (suggested) {
@@ -681,12 +586,6 @@ export default function Gamme({
       updatedOp.time = T_Total;
       return updatedOp;
     }));
-  };
-
-  const handleFabricSelection = (value: number) => {
-      // Legacy - kept if needed for fallback, but main logic is now fabricSettings
-      setGlobalGuide(value);
-      setShowFabricModal(false);
   };
 
   const updateFabricValue = (key: 'easy' | 'medium' | 'hard', val: number) => {
@@ -739,10 +638,20 @@ export default function Gamme({
     setDraggedIndex(null);
   };
 
+  // --- CALCULATIONS FOR HEADER ---
+  const totalMin = operations.reduce((sum, op) => sum + (op.time || 0), 0);
+  const tempsArticle = totalMin * 1.20; 
+
+  const prodDay100 = tempsArticle > 0 ? (presenceTime * numWorkers) / tempsArticle : 0;
+  const prodDayEff = prodDay100 * (efficiency / 100);
+  const hours = presenceTime / 60;
+  const prodHour100 = hours > 0 ? prodDay100 / hours : 0;
+  const prodHourEff = hours > 0 ? prodDayEff / hours : 0;
+
   return (
     <div className="space-y-6 pb-20 animate-in fade-in slide-in-from-bottom-2 duration-300 relative">
       
-       {/* 1. SINGLE ROW HEADER - RESPONSIVE */}
+       {/* 1. SINGLE ROW HEADER - RESPONSIVE (UNCHANGED) */}
        <div className="bg-white rounded-xl border border-slate-200 shadow-sm mb-4 p-2 flex flex-nowrap items-center gap-2 overflow-x-auto no-scrollbar">
             {/* OUVRIERS / HEURES */}
             <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 rounded-lg border border-slate-100 shrink-0">
@@ -942,21 +851,11 @@ export default function Gamme({
                     </td>
                     <td className="py-3 px-4 relative">
                       <div className="relative w-full">
-                          {/* Ghost Text Overlay */}
-                          {activeSuggestionOpId === op.id && currentWordContext && (
-                              <div 
-                                  className="absolute inset-0 flex items-center pointer-events-none whitespace-pre overflow-hidden text-sm font-medium"
-                                  aria-hidden="true"
-                              >
-                                  <span className="text-transparent">{currentWordContext.textBefore}</span>
-                                  <span className="text-slate-400 opacity-60 bg-slate-100/50 rounded-sm">{currentWordContext.suffix}</span>
-                              </div>
-                          )}
                           <input
                             type="text" 
+                            list="gamme-vocabulary-list"
                             value={op.description}
                             onChange={(e) => handleDescriptionChange(e, op.id)}
-                            onKeyDown={(e) => handleDescriptionKeyDown(e, op.id)}
                             onBlur={(e) => handleDescriptionBlur(e.target.value)}
                             onFocus={(e) => handleDescriptionChange(e, op.id)}
                             placeholder="Saisir description..."
@@ -1088,6 +987,11 @@ export default function Gamme({
              </React.Fragment>
            ))}
         </datalist>
+        <datalist id="gamme-vocabulary-list">
+            {fullVocabulary.map((word, index) => (
+                <option key={index} value={word} />
+            ))}
+        </datalist>
       </div>
 
       {/* Modals ... (Unchanged) */}
@@ -1204,7 +1108,7 @@ export default function Gamme({
           </div>
       )}
 
-      {/* GUIDE SELECTION MODAL - Same content */}
+      {/* GUIDE SELECTION MODAL */}
       {showGuideModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
               <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setShowGuideModal(null)} />

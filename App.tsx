@@ -63,30 +63,6 @@ const INITIAL_GUIDES: Guide[] = [
     { id: 'g9', name: 'Pied Fermeture', category: 'Opérations Spéciales', machineType: 'Piqueuse Plate (301)', description: 'Pied étroit pour coudre au plus près des mailles du zip.', useCase: 'Fermetures Éclair' },
 ];
 
-const INITIAL_MOCK_MODELS: ModelData[] = [
-  {
-    id: "m1",
-    filename: "Chemise_H_Classique.json",
-    image: null,
-    meta_data: { nom_modele: "Chemise Homme Classique", date_creation: "2026-01-15", date_lancement: "2026-02-01", total_temps: 12.50, effectif: 12 },
-    gamme_operatoire: []
-  },
-  {
-    id: "m2",
-    filename: "Pantalon_Denim_5P.json",
-    image: null,
-    meta_data: { nom_modele: "Pantalon Denim 5 Poches", date_creation: "2026-01-18", date_lancement: "2026-02-10", total_temps: 18.20, effectif: 18 },
-    gamme_operatoire: []
-  },
-  {
-    id: "m3",
-    filename: "TShirt_Col_V.json",
-    image: null,
-    meta_data: { nom_modele: "T-Shirt Col V Basic", date_creation: "2026-01-10", date_lancement: "2026-01-25", total_temps: 4.50, effectif: 6 },
-    gamme_operatoire: []
-  }
-];
-
 export default function App() {
   const [currentView, setCurrentView] = useState('studio');
   
@@ -98,8 +74,8 @@ export default function App() {
   const [standardTimes, setStandardTimes] = useState<StandardTime[]>(INITIAL_STANDARD_TIMES);
   const [guides, setGuides] = useState<Guide[]>(INITIAL_GUIDES);
 
-  // Library State
-  const [savedModels, setSavedModels] = useState<ModelData[]>(INITIAL_MOCK_MODELS);
+  // Library State - Initialized Empty (No Mock Data)
+  const [savedModels, setSavedModels] = useState<ModelData[]>([]);
 
   // Project Data
   const [articleName, setArticleName] = useState('');
@@ -164,6 +140,52 @@ export default function App() {
       setCurrentView('studio');
   };
 
+  // Handle Importing a Model (Universal JSON)
+  const handleImportModel = (file: File) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+          try {
+              const content = e.target?.result as string;
+              if (!content) return;
+              
+              const json = JSON.parse(content);
+              
+              if (!json || typeof json !== 'object') {
+                  throw new Error("Format de fichier invalide");
+              }
+              
+              // Validation simple pour vérifier si c'est un fichier BERAMETHODE valide
+              // On vérifie la présence de clés minimales, sinon on adapte
+              
+              const safeModel: ModelData = {
+                  id: `imported_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+                  filename: file.name,
+                  image: json.image || null,
+                  meta_data: {
+                      nom_modele: json.meta_data?.nom_modele || json.articleName || "Modèle Importé",
+                      date_creation: json.meta_data?.date_creation || new Date().toISOString().split('T')[0],
+                      date_lancement: json.meta_data?.date_lancement || json.meta_data?.date || "",
+                      total_temps: Number(json.meta_data?.total_temps || json.totalTime || 0),
+                      effectif: Number(json.meta_data?.effectif || json.numWorkers || 0)
+                  },
+                  gamme_operatoire: Array.isArray(json.gamme_operatoire) ? json.gamme_operatoire : (Array.isArray(json.operations) ? json.operations : [])
+              };
+
+              // Force add even if empty operations to avoid user confusion
+              setSavedModels(prev => [safeModel, ...prev]);
+              alert("Modèle importé avec succès !");
+
+          } catch (err) {
+              console.error(err);
+              alert("Erreur lors de l'importation. Le fichier est peut-être corrompu ou le format n'est pas reconnu.");
+          }
+      };
+      reader.onerror = () => {
+          alert("Erreur de lecture du fichier.");
+      };
+      reader.readAsText(file);
+  };
+
   // Handle Saving current work to Library
   const handleSaveToLibrary = () => {
       if (!articleName) {
@@ -206,7 +228,10 @@ export default function App() {
             {/* Logo */}
             <div className="flex items-center gap-2 pr-6 border-r border-slate-800 mr-2 shrink-0">
                  <div className="text-white bg-slate-800 p-1.5 rounded-lg border border-slate-700">
-                    <Activity className="w-5 h-5" />
+                    <svg viewBox="0 0 512 512" className="w-5 h-5 fill-current text-white" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M110 420 L230 80 H150 L30 420 H110 Z" />
+                        <path d="M260 80 H380 C430 80 470 110 470 170 C470 210 440 240 400 250 C450 260 480 300 480 350 C480 410 430 440 370 440 H200 L245 320 H360 C390 320 400 310 400 290 C400 270 380 260 350 260 H300 L320 200 H 370 C400 200 410 190 410 170 C410 150 390 140 360 140 H280 L260 80 Z" />
+                    </svg>
                  </div>
                  <span className="font-black text-lg text-white tracking-tight hidden sm:inline-block">BERAMETHODE</span>
             </div>
@@ -292,6 +317,7 @@ export default function App() {
                             <Library 
                                 models={savedModels} 
                                 onLoadModel={handleLoadModel}
+                                onImportModel={handleImportModel}
                                 onDeleteModel={(id) => setSavedModels(prev => prev.filter(m => m.id !== id))}
                                 onDuplicateModel={(model) => {
                                     const newModel = { ...model, id: Date.now().toString(), meta_data: { ...model.meta_data, nom_modele: model.meta_data.nom_modele + " (Copie)" }};

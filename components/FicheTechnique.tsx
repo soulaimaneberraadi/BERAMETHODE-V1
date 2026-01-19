@@ -1,3 +1,4 @@
+
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { 
   Calendar, 
@@ -22,9 +23,11 @@ import {
   Trash2,
   ArrowRight,
   Grid3X3,
-  Coins
+  Coins,
+  Palette
 } from 'lucide-react';
 import { FicheData } from '../types';
+import { TEXTILE_COLORS, TEXTILE_FABRICS } from '../data/textileData';
 
 interface FicheTechniqueProps {
   data: FicheData;
@@ -90,6 +93,14 @@ export default function FicheTechnique({
           setLocalCostMinute(data.costMinute?.toString() || '');
       }
   }, [data.costMinute]);
+
+  // Sync calculated Unit Cost back to data
+  useEffect(() => {
+      const computed = Number((tempsArticle * (data.costMinute || 0)).toFixed(2));
+      if (data.unitCost !== computed) {
+          setData(prev => ({ ...prev, unitCost: computed }));
+      }
+  }, [tempsArticle, data.costMinute, setData]);
 
   // --- CALCULATIONS ---
   const matrixStats = useMemo(() => {
@@ -186,6 +197,18 @@ export default function FicheTechnique({
   return (
     <div className="space-y-6 pb-24 animate-in fade-in slide-in-from-bottom-2 duration-300 relative">
       
+      {/* DATALISTS FOR AUTOCOMPLETE */}
+      <datalist id="fabric-list">
+          {TEXTILE_FABRICS.map((fabric, idx) => (
+              <option key={idx} value={fabric} />
+          ))}
+      </datalist>
+      <datalist id="color-list">
+          {TEXTILE_COLORS.map((color, idx) => (
+              <option key={idx} value={color.value}>{color.label}</option>
+          ))}
+      </datalist>
+
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
         {/* LEFT COLUMN: DATA INPUTS (8 Cols) */}
@@ -244,14 +267,15 @@ export default function FicheTechnique({
                     </div>
 
                     <div className="md:col-span-2 space-y-1">
-                        <label className="text-xs font-bold text-slate-400 uppercase ml-1">Désignation</label>
+                        <label className="text-xs font-bold text-slate-400 uppercase ml-1">Matière Principale / Désignation</label>
                         <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 focus-within:ring-2 focus-within:ring-indigo-100 focus-within:border-indigo-400 transition-all">
-                            <Tag className="w-4 h-4 text-slate-400" />
+                            <Layers className="w-4 h-4 text-slate-400" />
                             <input 
                                 type="text" 
+                                list="fabric-list"
                                 value={data.designation}
                                 onChange={(e) => handleChange('designation', e.target.value)}
-                                placeholder="Description courte (ex: Chemise Manches Longues...)"
+                                placeholder="Rechercher un tissu (ex: Popeline, Denim, Jersey...)"
                                 className="w-full bg-transparent text-sm font-bold text-slate-700 outline-none placeholder:text-slate-300"
                             />
                         </div>
@@ -284,14 +308,18 @@ export default function FicheTechnique({
                         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
                             {/* ADD COLOR INPUT */}
                             <div className="bg-slate-50 p-2 border-b border-slate-200 flex gap-2">
-                                <input 
-                                    type="text" 
-                                    placeholder="Nouvelle Couleur..." 
-                                    className="bg-white border border-slate-200 text-xs px-3 py-1.5 rounded-lg outline-none focus:border-indigo-400 w-full md:w-64"
-                                    value={newColorInput}
-                                    onChange={(e) => setNewColorInput(e.target.value)}
-                                    onKeyDown={(e) => e.key === 'Enter' && addColor()}
-                                />
+                                <div className="relative w-full md:w-64 flex items-center bg-white border border-slate-200 rounded-lg focus-within:border-indigo-400 px-3">
+                                    <Palette className="w-3 h-3 text-slate-400 mr-2" />
+                                    <input 
+                                        type="text" 
+                                        list="color-list"
+                                        placeholder="Nouvelle Couleur (ex: Noir...)" 
+                                        className="text-xs py-1.5 outline-none w-full"
+                                        value={newColorInput}
+                                        onChange={(e) => setNewColorInput(e.target.value)}
+                                        onKeyDown={(e) => e.key === 'Enter' && addColor()}
+                                    />
+                                </div>
                                 <button 
                                     onClick={addColor}
                                     className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-colors"
@@ -489,16 +517,12 @@ export default function FicheTechnique({
                              </div>
                         </div>
                         <div className="space-y-1">
-                             <label className="text-xs font-bold text-slate-400 uppercase ml-1">Coût Unitaire</label>
+                             <label className="text-xs font-bold text-blue-500 uppercase ml-1">Coût Unitaire</label>
                              <div className="flex items-center gap-2">
-                                <DollarSign className="w-4 h-4 text-slate-400" />
-                                <input 
-                                    type="number" step="0.01" 
-                                    value={data.unitCost || ''} 
-                                    onChange={(e) => handleChange('unitCost', Number(e.target.value))}
-                                    className="bg-transparent font-mono font-bold text-slate-700 outline-none w-24 border-b border-slate-200 focus:border-indigo-500"
-                                    placeholder="0.00"
-                                />
+                                <DollarSign className="w-4 h-4 text-blue-400" />
+                                <div className="font-mono font-bold text-blue-600 w-24 border-b border-blue-200 py-0.5">
+                                    {data.unitCost?.toFixed(2) || '0.00'}
+                                </div>
                                 <span className="text-xs font-bold text-slate-400">DH</span>
                              </div>
                         </div>
@@ -604,13 +628,13 @@ export default function FicheTechnique({
       </div>
 
       {/* FLOATING ACTION BUTTON - SKIP/NEXT */}
-      <div className="fixed bottom-6 right-6 z-40">
+      <div className="fixed bottom-4 right-4 z-40">
           <button 
             onClick={onNext}
-            className="flex items-center gap-2 bg-slate-900 text-white px-6 py-3 rounded-full shadow-xl hover:bg-emerald-600 hover:shadow-emerald-200/50 transition-all font-bold text-sm transform hover:-translate-y-1"
+            className="flex items-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-full shadow-lg hover:bg-emerald-600 hover:shadow-emerald-200/50 transition-all font-bold text-xs transform hover:-translate-y-1"
           >
               <span>Passer à la Gamme</span>
-              <ArrowRight className="w-4 h-4" />
+              <ArrowRight className="w-3 h-3" />
           </button>
       </div>
 

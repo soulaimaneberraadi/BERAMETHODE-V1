@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { 
   Search, 
@@ -13,15 +13,17 @@ import {
   Copy, 
   Trash2, 
   Edit2, 
-  SortAsc,
-  Filter,
-  ImageIcon
+  SortAsc, 
+  Filter, 
+  Upload,
+  AlertTriangle
 } from 'lucide-react';
 import { ModelData } from '../types';
 
 interface LibraryProps {
   models: ModelData[];
   onLoadModel: (model: ModelData) => void;
+  onImportModel: (file: File) => void;
   onDeleteModel: (id: string) => void;
   onDuplicateModel: (model: ModelData) => void;
   onRenameModel: (id: string, newName: string) => void;
@@ -30,6 +32,7 @@ interface LibraryProps {
 export default function Library({ 
   models, 
   onLoadModel, 
+  onImportModel,
   onDeleteModel, 
   onDuplicateModel, 
   onRenameModel 
@@ -37,12 +40,18 @@ export default function Library({
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<"date" | "name" | "time">("date");
   
+  // File Input Ref
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; modelId: string } | null>(null);
   
   // Rename State
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+
+  // Delete Confirmation State
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string, name: string } | null>(null);
 
   // Close context menu on global click
   useEffect(() => {
@@ -52,6 +61,21 @@ export default function Library({
   }, []);
 
   // --- ACTIONS ---
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file) {
+          onImportModel(file);
+      }
+  };
+
+  const triggerFileInput = () => {
+      if (fileInputRef.current) {
+          // Reset value to allow selecting the same file again if needed
+          fileInputRef.current.value = '';
+          fileInputRef.current.click();
+      }
+  };
 
   const handleRenameStart = (model: ModelData) => {
     setRenamingId(model.id);
@@ -111,6 +135,22 @@ export default function Library({
         </div>
 
         <div className="flex flex-wrap gap-3 w-full md:w-auto">
+          {/* IMPORT BUTTON */}
+          <input 
+              type="file" 
+              accept=".json" 
+              ref={fileInputRef} 
+              className="hidden" 
+              onChange={handleFileChange} 
+          />
+          <button 
+              onClick={triggerFileInput}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl font-bold text-sm border border-indigo-200 transition-colors"
+          >
+              <Upload className="w-4 h-4" />
+              <span className="hidden sm:inline">Importer</span>
+          </button>
+
           {/* Search */}
           <div className="relative flex-1 md:w-64">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -229,7 +269,12 @@ export default function Library({
               <FolderOpen className="w-8 h-8 text-slate-300" />
            </div>
            <h3 className="font-bold text-slate-600 mb-1">Aucun modèle trouvé</h3>
-           <p className="text-sm">Essayez de modifier votre recherche ou ajoutez un nouveau modèle.</p>
+           <p className="text-sm mb-4">La bibliothèque est vide.</p>
+           <div className="flex gap-3">
+               <button onClick={triggerFileInput} className="px-4 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg text-sm font-bold border border-indigo-200 transition-colors">
+                   Importer un fichier
+               </button>
+           </div>
         </div>
       )}
 
@@ -279,13 +324,49 @@ export default function Library({
               <div className="h-px bg-slate-100 my-1"></div>
 
               <button 
-                onClick={() => { onDeleteModel(contextMenu.modelId); setContextMenu(null); }}
+                onClick={() => { 
+                    const m = models.find(mod => mod.id === contextMenu.modelId);
+                    if (m) setDeleteConfirm({ id: m.id, name: m.meta_data.nom_modele });
+                    setContextMenu(null); 
+                }}
                 className="w-full text-left px-4 py-2.5 text-xs font-bold text-rose-600 hover:bg-rose-50 flex items-center gap-2 transition-colors"
               >
                 <Trash2 className="w-4 h-4" /> Supprimer
               </button>
             </>
           )}
+        </div>,
+        document.body
+      )}
+
+      {/* DELETE CONFIRMATION MODAL */}
+      {deleteConfirm && createPortal(
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden p-6 text-center transform scale-100 transition-all">
+                <div className="w-16 h-16 bg-rose-100 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-600">
+                    <Trash2 className="w-8 h-8" />
+                </div>
+                <h3 className="text-xl font-bold text-slate-800 mb-2">Confirmer la suppression</h3>
+                <p className="text-slate-500 text-sm mb-6 leading-relaxed">
+                    Êtes-vous sûr de vouloir supprimer le modèle <br/>
+                    <span className="font-bold text-slate-800">"{deleteConfirm.name}"</span> ? <br/>
+                    <span className="text-rose-500 font-medium text-xs">Cette action est irréversible.</span>
+                </p>
+                <div className="flex gap-3">
+                    <button 
+                        onClick={() => setDeleteConfirm(null)} 
+                        className="flex-1 px-4 py-2.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl font-bold text-sm transition-colors"
+                    >
+                        Annuler
+                    </button>
+                    <button 
+                        onClick={() => { onDeleteModel(deleteConfirm.id); setDeleteConfirm(null); }} 
+                        className="flex-1 px-4 py-2.5 bg-rose-600 text-white hover:bg-rose-700 rounded-xl font-bold text-sm shadow-lg shadow-rose-200 transition-colors"
+                    >
+                        Supprimer
+                    </button>
+                </div>
+            </div>
         </div>,
         document.body
       )}
