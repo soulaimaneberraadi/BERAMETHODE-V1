@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { FicheData } from '../types';
 import { TEXTILE_COLORS, TEXTILE_FABRICS } from '../data/textileData';
+import ExcelInput from './ExcelInput';
 
 interface FicheTechniqueProps {
   data: FicheData;
@@ -197,18 +198,6 @@ export default function FicheTechnique({
   return (
     <div className="space-y-6 pb-24 animate-in fade-in slide-in-from-bottom-2 duration-300 relative">
       
-      {/* DATALISTS FOR AUTOCOMPLETE */}
-      <datalist id="fabric-list">
-          {TEXTILE_FABRICS.map((fabric, idx) => (
-              <option key={idx} value={fabric} />
-          ))}
-      </datalist>
-      <datalist id="color-list">
-          {TEXTILE_COLORS.map((color, idx) => (
-              <option key={idx} value={color.value}>{color.label}</option>
-          ))}
-      </datalist>
-
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
         {/* LEFT COLUMN: DATA INPUTS (8 Cols) */}
@@ -268,15 +257,15 @@ export default function FicheTechnique({
 
                     <div className="md:col-span-2 space-y-1">
                         <label className="text-xs font-bold text-slate-400 uppercase ml-1">Matière Principale / Désignation</label>
-                        <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 focus-within:ring-2 focus-within:ring-indigo-100 focus-within:border-indigo-400 transition-all">
-                            <Layers className="w-4 h-4 text-slate-400" />
-                            <input 
-                                type="text" 
-                                list="fabric-list"
+                        <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 focus-within:ring-2 focus-within:ring-indigo-100 focus-within:border-indigo-400 transition-all relative">
+                            <Layers className="w-4 h-4 text-slate-400 z-20 relative" />
+                            <ExcelInput 
+                                suggestions={TEXTILE_FABRICS}
                                 value={data.designation}
-                                onChange={(e) => handleChange('designation', e.target.value)}
+                                onChange={(val) => handleChange('designation', val)}
                                 placeholder="Rechercher un tissu (ex: Popeline, Denim, Jersey...)"
-                                className="w-full bg-transparent text-sm font-bold text-slate-700 outline-none placeholder:text-slate-300"
+                                className="w-full bg-transparent text-sm font-bold text-slate-700 outline-none placeholder:text-slate-300 pl-9 pr-3"
+                                containerClassName="absolute inset-0 flex items-center"
                             />
                         </div>
                     </div>
@@ -309,20 +298,20 @@ export default function FicheTechnique({
                             {/* ADD COLOR INPUT */}
                             <div className="bg-slate-50 p-2 border-b border-slate-200 flex gap-2">
                                 <div className="relative w-full md:w-64 flex items-center bg-white border border-slate-200 rounded-lg focus-within:border-indigo-400 px-3">
-                                    <Palette className="w-3 h-3 text-slate-400 mr-2" />
-                                    <input 
-                                        type="text" 
-                                        list="color-list"
+                                    <Palette className="w-3 h-3 text-slate-400 mr-2 z-20 relative" />
+                                    <ExcelInput 
+                                        suggestions={TEXTILE_COLORS.map(c => c.value)}
                                         placeholder="Nouvelle Couleur (ex: Noir...)" 
-                                        className="text-xs py-1.5 outline-none w-full"
+                                        className="text-xs py-1.5 outline-none w-full pl-6 pr-2"
+                                        containerClassName="absolute inset-0 flex items-center"
                                         value={newColorInput}
-                                        onChange={(e) => setNewColorInput(e.target.value)}
+                                        onChange={(val) => setNewColorInput(val)}
                                         onKeyDown={(e) => e.key === 'Enter' && addColor()}
                                     />
                                 </div>
                                 <button 
                                     onClick={addColor}
-                                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-colors"
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-colors z-20"
                                 >
                                     <Plus className="w-3 h-3" /> Ajouter
                                 </button>
@@ -422,7 +411,7 @@ export default function FicheTechnique({
                 </div>
             </div>
 
-            {/* 2. PRODUCTION & DATA LINKED CARD */}
+            {/* 2. PRODUCTION & DATA LINKED CARD (Unchanged) */}
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                 <div className="bg-emerald-50/50 px-6 py-3 border-b border-emerald-100 flex items-center gap-2">
                     <Factory className="w-4 h-4 text-emerald-600" />

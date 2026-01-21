@@ -1,8 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Machine, Operation } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
 // Schema strict pour la Gamme de Montage (Legacy - pour référence si besoin)
 const operationSchema = {
   type: Type.ARRAY,

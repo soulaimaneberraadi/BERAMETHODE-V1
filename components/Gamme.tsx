@@ -36,6 +36,7 @@ import {
 import { Machine, Operation, ComplexityFactor, StandardTime, Guide } from '../types';
 import { analyzeTextileContext } from '../services/gemini';
 import { VOCABULARY } from '../data/vocabulary';
+import ExcelInput from './ExcelInput';
 
 interface GammeProps {
   machines: Machine[];
@@ -480,9 +481,7 @@ export default function Gamme({
   }, [fabricSettings]);
 
   // --- AUTOCOMPLETE LOGIC ---
-  const handleDescriptionChange = (e: React.ChangeEvent<HTMLInputElement>, opId: string) => {
-      const val = e.target.value;
-      
+  const handleDescriptionChange = (val: string, opId: string) => {
       setOperations(prev => prev.map(o => {
           if (o.id !== opId) return o;
           
@@ -647,6 +646,11 @@ export default function Gamme({
   const hours = presenceTime / 60;
   const prodHour100 = hours > 0 ? prodDay100 / hours : 0;
   const prodHourEff = hours > 0 ? prodDayEff / hours : 0;
+
+  // Prepare suggestions for Machine Input (combining name and classe)
+  const machineSuggestions = useMemo(() => {
+      return machines.flatMap(m => [m.name, m.classe]);
+  }, [machines]);
 
   return (
     <div className="space-y-6 pb-20 animate-in fade-in slide-in-from-bottom-2 duration-300 relative">
@@ -851,27 +855,28 @@ export default function Gamme({
                     </td>
                     <td className="py-3 px-4 relative">
                       <div className="relative w-full">
-                          <input
-                            type="text" 
-                            list="gamme-vocabulary-list"
+                          {/* USING EXCEL INPUT FOR DESCRIPTION */}
+                          <ExcelInput
+                            suggestions={fullVocabulary}
                             value={op.description}
-                            onChange={(e) => handleDescriptionChange(e, op.id)}
+                            onChange={(val) => handleDescriptionChange(val, op.id)}
                             onBlur={(e) => handleDescriptionBlur(e.target.value)}
-                            onFocus={(e) => handleDescriptionChange(e, op.id)}
                             placeholder="Saisir description..."
                             className="relative z-10 w-full bg-transparent border-none outline-none font-medium text-slate-700 placeholder:text-slate-300 focus:placeholder:text-slate-400 text-sm"
+                            containerClassName="w-full"
                           />
                       </div>
                     </td>
                     <td className="py-3 px-4">
                       <div className="relative">
-                        <input
-                          type="text"
-                          list="machines-list"
+                        {/* USING EXCEL INPUT FOR MACHINES */}
+                        <ExcelInput
+                          suggestions={machineSuggestions}
                           value={machineValue}
-                          onChange={(e) => handleMachineChange(op.id, e.target.value)}
+                          onChange={(val) => handleMachineChange(op.id, val)}
                           className={`w-full bg-slate-100/50 border border-slate-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-emerald-500 focus:bg-white transition-all placeholder:text-slate-400 ${!isMachineValid && machineValue ? 'text-rose-500 font-bold border-rose-200 bg-rose-50/50' : 'text-slate-700'}`}
                           placeholder="Mac / Code"
+                          containerClassName="w-full"
                         />
                       </div>
                     </td>
@@ -980,18 +985,6 @@ export default function Gamme({
             </tbody>
           </table>
         </div>
-        <datalist id="machines-list">
-           {machines.map(m => (
-             <React.Fragment key={m.id}>
-               <option value={m.name}>{m.classe}</option>
-             </React.Fragment>
-           ))}
-        </datalist>
-        <datalist id="gamme-vocabulary-list">
-            {fullVocabulary.map((word, index) => (
-                <option key={index} value={word} />
-            ))}
-        </datalist>
       </div>
 
       {/* Modals ... (Unchanged) */}
