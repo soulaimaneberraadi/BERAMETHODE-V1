@@ -58,6 +58,9 @@ export type Operation = {
   majoration?: number;
   guideId?: string;
   guideName?: string;
+  groupId?: string; // Link operations together (visual grouping)
+  targetOperationId?: string; // New: Defines the destination flow (Preparation -> Montage)
+  side?: 'G' | 'D' | 'GD'; // New: Side of operation (Gauche, Droite, Gauche/Droite)
 };
 
 export type AutoMachine = {
@@ -72,17 +75,21 @@ export type AutoMachine = {
 
 export type Poste = {
   id: string;
+  originalId?: string; // Links split physical posts (P1.1, P1.2) back to logical group (P1)
   name: string;
   machine: string;
   operatorName?: string;
   notes?: string;
   timeOverride?: number;
   length?: number;
+  isPlaced?: boolean; // New field for manual mode state
+  colorName?: string; // New field for persistent color assignment
 };
 
 export type FicheData = {
   date: string;
   client: string;
+  category: string;
   designation: string;
   color: string;
   quantity: number;
@@ -142,10 +149,16 @@ export interface ModelData {
   image?: string | null; // Added Image
   meta_data: {
     nom_modele: string;
+    category?: string; // Added Category for search and display
     date_creation: string;
     date_lancement?: string; // Added Launch Date
     total_temps: number; // in minutes
     effectif: number;
   };
   gamme_operatoire: Operation[];
+  // Added for Implantation persistence
+  implantation?: {
+    postes: Poste[];
+    assignments: Record<string, string[]>;
+  };
 }

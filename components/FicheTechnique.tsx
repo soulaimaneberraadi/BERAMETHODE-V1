@@ -9,22 +9,24 @@ import {
   DollarSign, 
   Image as ImageIcon, 
   Upload, 
-  FileText,
-  Factory,
-  Clock,
-  Users,
-  Activity,
-  Target,
-  TrendingUp,
-  Shirt,
-  Maximize2,
-  X,
-  Plus,
-  Trash2,
-  ArrowRight,
-  Grid3X3,
-  Coins,
-  Palette
+  FileText, 
+  Factory, 
+  Clock, 
+  Users, 
+  Activity, 
+  Target, 
+  TrendingUp, 
+  Shirt, 
+  Maximize2, 
+  X, 
+  Plus, 
+  Trash2, 
+  ArrowRight, 
+  Grid3X3, 
+  Coins, 
+  Palette,
+  ChevronDown,
+  LayoutGrid
 } from 'lucide-react';
 import { FicheData } from '../types';
 import { TEXTILE_COLORS, TEXTILE_FABRICS } from '../data/textileData';
@@ -47,7 +49,7 @@ interface FicheTechniqueProps {
   images: { front: string | null; back: string | null };
   setImages: React.Dispatch<React.SetStateAction<{ front: string | null; back: string | null }>>;
   
-  // Nav
+  // Nav - Not used anymore but kept in interface for compatibility if passed
   onNext?: () => void;
 }
 
@@ -69,7 +71,7 @@ export default function FicheTechnique({
 
   const frontInputRef = useRef<HTMLInputElement>(null);
   const backInputRef = useRef<HTMLInputElement>(null);
-
+  
   // -- Image Preview Modal State --
   const [previewImage, setPreviewImage] = useState<{ src: string, title: string } | null>(null);
 
@@ -132,9 +134,13 @@ export default function FicheTechnique({
 
   // --- HANDLERS ---
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'front' | 'back') => {
-    if (e.target.files && e.target.files[0]) {
-      const url = URL.createObjectURL(e.target.files[0]);
-      setImages(prev => ({ ...prev, [type]: url }));
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImages(prev => ({ ...prev, [type]: reader.result as string }));
+      };
+      reader.readAsDataURL(file);
     }
   };
 
@@ -239,19 +245,54 @@ export default function FicheTechnique({
                         </div>
                     </div>
 
-                    {/* Spacer for Desktop Layout to align Date right */}
-                    <div className="hidden md:block"></div>
+                    {/* Category Field */}
+                    <div className="space-y-1">
+                        <label className="text-xs font-bold text-slate-400 uppercase ml-1 flex items-center gap-1">
+                            Catégorie <span className="text-rose-500">*</span>
+                        </label>
+                        <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 focus-within:ring-2 focus-within:ring-indigo-100 focus-within:border-indigo-400 transition-all">
+                            <LayoutGrid className="w-4 h-4 text-slate-400" />
+                            <ExcelInput
+                                suggestions={["T-Shirt", "Polo", "Chemise", "Pantalon", "Robe", "Veste", "Sweat", "Short", "Jupe", "Pyjama", "Sous-vêtement"]}
+                                value={data.category}
+                                onChange={(val) => handleChange('category', val)}
+                                placeholder="Famille produit"
+                                className="w-full bg-transparent text-sm font-bold text-slate-700 outline-none placeholder:text-slate-300"
+                            />
+                        </div>
+                    </div>
 
                     <div className="space-y-1">
                         <label className="text-xs font-bold text-slate-400 uppercase ml-1">Date Lancement</label>
                         <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 focus-within:ring-2 focus-within:ring-indigo-100 focus-within:border-indigo-400 transition-all">
-                            <Calendar className="w-4 h-4 text-slate-400" />
+                            {/* Calendar Trigger: Invisible Overlay Technique */}
+                            <div className="relative group">
+                                <div className="p-1.5 bg-white rounded-lg text-indigo-500 shadow-sm border border-indigo-100 group-hover:bg-indigo-50 transition-colors pointer-events-none">
+                                    <Calendar className="w-4 h-4" />
+                                </div>
+                                {/* The invisible input sits on top of the icon. Clicking it opens the native picker immediately. */}
+                                <input 
+                                    type="date"
+                                    value={data.date}
+                                    onChange={(e) => handleChange('date', e.target.value)}
+                                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                                    title="Choisir une date"
+                                />
+                            </div>
+
+                            {/* Manual Entry Input */}
                             <input 
                                 type="date" 
                                 value={data.date}
                                 onChange={(e) => handleChange('date', e.target.value)}
-                                className="w-full bg-transparent text-sm font-bold text-slate-700 outline-none placeholder:text-slate-300"
+                                className="w-full bg-transparent text-sm font-bold text-slate-700 outline-none placeholder:text-slate-300 font-mono date-input-modern"
                             />
+                            {/* CSS to hide default calendar picker indicator on the text input so it looks clean */}
+                            <style>{`
+                                .date-input-modern::-webkit-calendar-picker-indicator {
+                                    display: none;
+                                }
+                            `}</style>
                         </div>
                     </div>
 
@@ -444,9 +485,9 @@ export default function FicheTechnique({
                                 <Users className="w-5 h-5 text-indigo-500" />
                                 <input 
                                     type="number"
-                                    min="1"
+                                    min="0"
                                     value={numWorkers}
-                                    onChange={(e) => setNumWorkers(Math.max(1, Number(e.target.value)))}
+                                    onChange={(e) => setNumWorkers(Math.max(0, Number(e.target.value)))}
                                     className="w-full bg-transparent text-xl font-black text-slate-700 outline-none"
                                 />
                             </div>
@@ -490,7 +531,7 @@ export default function FicheTechnique({
                     </div>
 
                     {/* Costing Footer */}
-                    <div className="mt-6 pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-3 gap-6">
+                    <div className="mt-6 pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-6">
                         <div className="space-y-1">
                              <label className="text-xs font-bold text-blue-500 uppercase ml-1">Coût Minute (DH)</label>
                              <div className="flex items-center gap-2">
@@ -502,16 +543,6 @@ export default function FicheTechnique({
                                     className="bg-transparent font-mono font-bold text-blue-600 outline-none w-24 border-b border-blue-200 focus:border-blue-500"
                                     placeholder="0.00"
                                 />
-                                <span className="text-xs font-bold text-slate-400">DH</span>
-                             </div>
-                        </div>
-                        <div className="space-y-1">
-                             <label className="text-xs font-bold text-blue-500 uppercase ml-1">Coût Unitaire</label>
-                             <div className="flex items-center gap-2">
-                                <DollarSign className="w-4 h-4 text-blue-400" />
-                                <div className="font-mono font-bold text-blue-600 w-24 border-b border-blue-200 py-0.5">
-                                    {data.unitCost?.toFixed(2) || '0.00'}
-                                </div>
                                 <span className="text-xs font-bold text-slate-400">DH</span>
                              </div>
                         </div>
@@ -614,17 +645,6 @@ export default function FicheTechnique({
             </div>
 
         </div>
-      </div>
-
-      {/* FLOATING ACTION BUTTON - SKIP/NEXT */}
-      <div className="fixed bottom-4 right-4 z-40">
-          <button 
-            onClick={onNext}
-            className="flex items-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-full shadow-lg hover:bg-emerald-600 hover:shadow-emerald-200/50 transition-all font-bold text-xs transform hover:-translate-y-1"
-          >
-              <span>Passer à la Gamme</span>
-              <ArrowRight className="w-3 h-3" />
-          </button>
       </div>
 
       {/* IMAGE PREVIEW MODAL */}

@@ -1,3 +1,4 @@
+
 import React, { useMemo, useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Operation, Poste, Machine } from '../types';
@@ -28,7 +29,12 @@ import {
   X,
   Save,
   AlertCircle,
-  Percent
+  Percent,
+  Link,
+  PanelTop,
+  Hand,
+  Calculator,
+  ListPlus
 } from 'lucide-react';
 import {
   ComposedChart,
@@ -45,6 +51,8 @@ import {
 
 interface BalancingProps {
   operations: Operation[];
+  // Added setOperations to allow modification of Gamme from Balancing view
+  setOperations?: React.Dispatch<React.SetStateAction<Operation[]>>;
   efficiency: number;
   setEfficiency: React.Dispatch<React.SetStateAction<number>>;
   bf: number;
@@ -61,20 +69,46 @@ interface BalancingProps {
   machines: Machine[];
 }
 
-// --- COLOR PALETTE FOR POSTES ---
+// --- GROUP COLOR PALETTE (Matched with Gamme - High Contrast Alternating) ---
+const GROUP_COLORS = [
+  { bg: 'bg-indigo-50', border: 'border-indigo-500', text: 'text-indigo-700' }, // Cool
+  { bg: 'bg-orange-50', border: 'border-orange-500', text: 'text-orange-700' }, // Warm
+  { bg: 'bg-emerald-50', border: 'border-emerald-500', text: 'text-emerald-700' }, // Cool
+  { bg: 'bg-rose-50', border: 'border-rose-500', text: 'text-rose-700' },       // Warm
+  { bg: 'bg-cyan-50', border: 'border-cyan-500', text: 'text-cyan-700' },       // Cool
+  { bg: 'bg-amber-50', border: 'border-amber-500', text: 'text-amber-700' },    // Warm
+  { bg: 'bg-violet-50', border: 'border-violet-500', text: 'text-violet-700' }, // Cool
+  { bg: 'bg-lime-50', border: 'border-lime-500', text: 'text-lime-700' },       // Warm
+  { bg: 'bg-fuchsia-50', border: 'border-fuchsia-500', text: 'text-fuchsia-700' }, // Cool
+  { bg: 'bg-teal-50', border: 'border-teal-500', text: 'text-teal-700' },       // Warm/Cool
+  { bg: 'bg-red-50', border: 'border-red-500', text: 'text-red-700' },          // Warm
+  { bg: 'bg-sky-50', border: 'border-sky-500', text: 'text-sky-700' },          // Cool
+];
+
+const getGroupStyle = (groupId: string) => {
+    if (!groupId) return null;
+    let hash = 0;
+    for (let i = 0; i < groupId.length; i++) {
+        hash = groupId.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const index = Math.abs(hash) % GROUP_COLORS.length;
+    return GROUP_COLORS[index];
+};
+
+// --- COLOR PALETTE FOR POSTES (Matched with Gamme Sequence) ---
 const POSTE_COLORS = [
   { name: 'indigo',  bg: 'bg-indigo-50',  border: 'border-indigo-200',  text: 'text-indigo-700',  badge: 'bg-indigo-100',  fill: '#6366f1', badgeText: 'text-indigo-800' },
-  { name: 'rose',    bg: 'bg-rose-50',    border: 'border-rose-200',    text: 'text-rose-700',    badge: 'bg-rose-100',    fill: '#f43f5e', badgeText: 'text-rose-800' },
-  { name: 'emerald', bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-700', badge: 'bg-emerald-100', fill: '#10b981', badgeText: 'text-emerald-800' },
-  { name: 'amber',   bg: 'bg-amber-50',   border: 'border-amber-200',   text: 'text-amber-700',   badge: 'bg-amber-100',   fill: '#f59e0b', badgeText: 'text-amber-800' },
-  { name: 'cyan',    bg: 'bg-cyan-50',    border: 'border-cyan-200',    text: 'text-cyan-700',    badge: 'bg-cyan-100',    fill: '#06b6d4', badgeText: 'text-cyan-800' },
-  { name: 'violet',  bg: 'bg-violet-50',  border: 'border-violet-200',  text: 'text-violet-700',  badge: 'bg-violet-100',  fill: '#8b5cf6', badgeText: 'text-violet-800' },
   { name: 'orange',  bg: 'bg-orange-50',  border: 'border-orange-200',  text: 'text-orange-700',  badge: 'bg-orange-100',  fill: '#f97316', badgeText: 'text-orange-800' },
-  { name: 'teal',    bg: 'bg-teal-50',    border: 'border-teal-200',    text: 'text-teal-700',    badge: 'bg-teal-100',    fill: '#14b8a6', badgeText: 'text-teal-800' },
-  { name: 'fuchsia', bg: 'bg-fuchsia-50', border: 'border-fuchsia-200', text: 'text-fuchsia-700', badge: 'bg-fuchsia-100', fill: '#d946ef', badgeText: 'text-fuchsia-800' },
-  { name: 'sky',     bg: 'bg-sky-50',     border: 'border-sky-200',     text: 'text-sky-700',     badge: 'bg-sky-100',     fill: '#0ea5e9', badgeText: 'text-sky-800' },
+  { name: 'emerald', bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-700', badge: 'bg-emerald-100', fill: '#10b981', badgeText: 'text-emerald-800' },
+  { name: 'rose',    bg: 'bg-rose-50',    border: 'border-rose-200',    text: 'text-rose-700',    badge: 'bg-rose-100',    fill: '#f43f5e', badgeText: 'text-rose-800' },
+  { name: 'cyan',    bg: 'bg-cyan-50',    border: 'border-cyan-200',    text: 'text-cyan-700',    badge: 'bg-cyan-100',    fill: '#06b6d4', badgeText: 'text-cyan-800' },
+  { name: 'amber',   bg: 'bg-amber-50',   border: 'border-amber-200',   text: 'text-amber-700',   badge: 'bg-amber-100',   fill: '#f59e0b', badgeText: 'text-amber-800' },
+  { name: 'violet',  bg: 'bg-violet-50',  border: 'border-violet-200',  text: 'text-violet-700',  badge: 'bg-violet-100',  fill: '#8b5cf6', badgeText: 'text-violet-800' },
   { name: 'lime',    bg: 'bg-lime-50',    border: 'border-lime-200',    text: 'text-lime-700',    badge: 'bg-lime-100',    fill: '#84cc16', badgeText: 'text-lime-800' },
-  { name: 'pink',    bg: 'bg-pink-50',    border: 'border-pink-200',    text: 'text-pink-700',    badge: 'bg-pink-100',    fill: '#ec4899', badgeText: 'text-pink-800' },
+  { name: 'fuchsia', bg: 'bg-fuchsia-50', border: 'border-fuchsia-200', text: 'text-fuchsia-700', badge: 'bg-fuchsia-100', fill: '#d946ef', badgeText: 'text-fuchsia-800' },
+  { name: 'teal',    bg: 'bg-teal-50',    border: 'border-teal-200',    text: 'text-teal-700',    badge: 'bg-teal-100',    fill: '#14b8a6', badgeText: 'text-teal-800' },
+  { name: 'red',     bg: 'bg-red-50',     border: 'border-red-200',     text: 'text-red-700',     badge: 'bg-red-100',     fill: '#ef4444', badgeText: 'text-red-800' },
+  { name: 'sky',     bg: 'bg-sky-50',     border: 'border-sky-200',     text: 'text-sky-700',     badge: 'bg-sky-100',     fill: '#0ea5e9', badgeText: 'text-sky-800' },
 ];
 
 const NEUTRAL_COLOR = { 
@@ -87,7 +121,6 @@ const NEUTRAL_COLOR = {
   badgeText: 'text-slate-800' 
 };
 
-// Helper for Status Colors
 const getStatusColor = (saturation: number) => {
     if (saturation > 115) return { 
         name: 'overload', 
@@ -121,7 +154,8 @@ const getStatusColor = (saturation: number) => {
 const getPosteColor = (index: number) => POSTE_COLORS[index % POSTE_COLORS.length];
 
 export default function Balancing({ 
-  operations, 
+  operations,
+  setOperations,
   efficiency,
   setEfficiency,
   bf, 
@@ -137,13 +171,23 @@ export default function Balancing({
   machines
 }: BalancingProps) {
 
-  // --- STATE ---
   const [isManual, setIsManual] = useState(false);
   const [viewMode, setViewMode] = useState<'grouped' | 'matrix'>('matrix');
-  const [isSticky, setIsSticky] = useState(true);
-  const [showColors, setShowColors] = useState(true);
+  const [isSticky, setIsSticky] = useState(true); // Column Sticky
+  const [isHeaderSticky, setIsHeaderSticky] = useState(true); // Row Header Sticky
+  const [showColors, setShowColors] = useState(true); // Column Colors
+  const [showGroupColors, setShowGroupColors] = useState(true); // Row Colors (Groups)
 
-  // Context Menu State
+  // --- INSERT MODAL STATE ---
+  const [showInsertModal, setShowInsertModal] = useState(false);
+  const [insertIndex, setInsertIndex] = useState(-1);
+  const [insertData, setInsertData] = useState({
+      machine: 'MAN',
+      description: '',
+      length: 0,
+      notes: ''
+  });
+
   const [contextMenu, setContextMenu] = useState<{
     visible: boolean;
     x: number;
@@ -153,27 +197,65 @@ export default function Balancing({
 
   const [clipboard, setClipboard] = useState<{ poste: Poste | null; mode: 'copy' | 'cut' } | null>(null);
 
-  // --- HELPER: SECONDS CONVERTER ---
-  const toSec = (min: number) => Math.round(min * 60);
+  // Precision Helper: To Fixed 2
+  const toSec = (min: number) => Number((min * 60).toFixed(2));
   const bfSeconds = bf * 60;
 
-  // Global click listener to close context menu
+  // --- ENSURE SORTING (STRICT GAMME ORDER) ---
+  const sortedOperations = useMemo(() => {
+      return [...operations].sort((a, b) => a.order - b.order);
+  }, [operations]);
+
+  // --- SMART INDEXING (1.1, 1.2...) ---
+  const getDisplayIndex = (opList: Operation[], index: number) => {
+      let mainCounter = 0;
+      let subCounter = 0;
+      let lastGroupId = '';
+
+      for (let i = 0; i <= index; i++) {
+          const currentOp = opList[i];
+          if (currentOp.groupId) {
+              if (currentOp.groupId !== lastGroupId) {
+                  // New Group Start
+                  mainCounter++;
+                  subCounter = 1;
+                  lastGroupId = currentOp.groupId;
+              } else {
+                  // Inside same group
+                  subCounter++;
+              }
+          } else {
+              // No Group
+              mainCounter++;
+              subCounter = 0;
+              lastGroupId = '';
+          }
+      }
+
+      if (subCounter > 0) {
+          return `${mainCounter}.${subCounter}`;
+      }
+      return `${mainCounter}`;
+  };
+
   useEffect(() => {
     const handleClick = () => setContextMenu(null);
     window.addEventListener('click', handleClick);
-    return () => window.removeEventListener('click', handleClick);
+    window.addEventListener('scroll', handleClick, true);
+    return () => {
+      window.removeEventListener('click', handleClick);
+      window.removeEventListener('scroll', handleClick, true);
+    }
   }, []);
 
   // --- INITIALIZATION / AUTO-BALANCE ---
   const runAutoBalancing = (force = false) => {
-    // Prevent overwrite if manual mode is active, unless forced
     if (isManual && !force) return;
 
     const newAssignments: Record<string, string[]> = {};
     const newPostes: Poste[] = [];
 
     // Allow 15% tolerance on cycle time
-    // If bf is 0 (1 worker or invalid calc), default to infinite limit but we still respect machine changes
     const limitMax = bf > 0 ? bf * 1.15 : Number.MAX_VALUE;
 
     let currentPosteOps: Operation[] = [];
@@ -198,39 +280,41 @@ export default function Balancing({
         posteIdx++;
         currentPosteOps = [];
         currentTotalTime = 0;
+        currentMachine = '';
     };
 
-    operations.forEach(op => {
-        // Safe Machine Name Check: Try op.machineName, then lookup by ID from machines prop
+    // USE SORTED OPERATIONS FOR AUTO-BALANCING TO RESPECT SEQUENCE
+    sortedOperations.forEach(op => {
+        // Standard balancing: Operations are processed in sequence.
+        let primaryMachine = 'MAN';
         let rawName = op.machineName;
         if (!rawName && op.machineId) {
             const foundM = machines.find(m => m.id === op.machineId);
             if (foundM) rawName = foundM.name;
         }
-        if (!rawName) rawName = 'MAN';
+        if (rawName) {
+            let m = rawName.trim().toUpperCase();
+            if (m.includes('MANUEL')) m = 'MAN';
+            primaryMachine = m;
+        }
 
-        let opMachine = rawName.trim().toUpperCase();
-        if (opMachine.includes('MANUEL')) opMachine = 'MAN';
+        const blockTime = op.time || 0;
 
-        const opTime = op.time || 0;
-
-        // Logic: Group if same machine AND fits in time limit
-        // Strict Comparison: currentMachine MUST match opMachine exactly
+        const cleanCurrent = (currentMachine || '').trim().toUpperCase();
+        const cleanPrimary = (primaryMachine || '').trim().toUpperCase();
         
-        const isSameMachine = currentPosteOps.length === 0 || opMachine === currentMachine;
-        const fits = (currentTotalTime + opTime) <= limitMax;
+        const isSameMachine = currentPosteOps.length === 0 || cleanPrimary === cleanCurrent;
+        const fits = (currentTotalTime + blockTime) <= limitMax;
 
         if (isSameMachine && fits) {
             currentPosteOps.push(op);
-            currentTotalTime += opTime;
-            // Initialize machine name for the new group
-            if (currentPosteOps.length === 1) currentMachine = opMachine;
+            currentTotalTime += blockTime;
+            if (currentPosteOps.length === 1) currentMachine = primaryMachine;
         } else {
             flush();
-            // Start new poste
             currentPosteOps = [op];
-            currentTotalTime = opTime;
-            currentMachine = opMachine;
+            currentTotalTime = blockTime;
+            currentMachine = primaryMachine;
         }
     });
     flush();
@@ -239,12 +323,11 @@ export default function Balancing({
     setAssignments(newAssignments);
   };
 
-  // Re-run auto balancing when critical factors change, IF not in manual mode
   useEffect(() => {
     if (!isManual) {
         runAutoBalancing();
     }
-  }, [operations, bf, isManual, machines]); // Added dependencies
+  }, [operations, bf, isManual, machines]);
 
   // --- CONTEXT MENU HANDLERS ---
   const handleContextMenu = (e: React.MouseEvent, posteId: string) => {
@@ -253,7 +336,16 @@ export default function Balancing({
     setContextMenu({ visible: true, x: e.pageX, y: e.pageY, posteId });
   };
 
-  const handleContextAction = (action: 'insert' | 'delete' | 'clear' | 'copy' | 'cut' | 'paste') => {
+  const handleContextAction = (action: 'insert' | 'delete' | 'clear' | 'copy' | 'cut' | 'paste' | 'duplicate' | 'toggleManual') => {
+      
+      if (action === 'toggleManual') {
+          setIsManual(!isManual);
+          setContextMenu(null);
+          return;
+      }
+
+      setIsManual(true);
+
       if (!contextMenu?.posteId) return;
       const idx = postes.findIndex(p => p.id === contextMenu.posteId);
       if (idx === -1) return;
@@ -263,12 +355,24 @@ export default function Balancing({
 
       switch(action) {
           case 'insert': {
-              const newPoste: Poste = { 
-                  id: `P_${Date.now()}`, 
-                  name: 'P?', 
-                  machine: 'MAN', 
-                  notes: '', 
-                  operatorName: '' 
+              const refPoste = newPostes[idx];
+              setInsertData({
+                  machine: refPoste.machine || 'MAN',
+                  description: 'Nouvelle Opération',
+                  length: 0,
+                  notes: ''
+              });
+              setInsertIndex(idx + 1);
+              setShowInsertModal(true);
+              setContextMenu(null);
+              return;
+          }
+          case 'duplicate': {
+              const currentPoste = newPostes[idx];
+              const newPoste: Poste = {
+                  ...currentPoste,
+                  id: `P_${Date.now()}`,
+                  name: 'P?' 
               };
               newPostes.splice(idx + 1, 0, newPoste);
               break;
@@ -334,16 +438,86 @@ export default function Balancing({
       setContextMenu(null);
   };
 
-  // --- MANUAL MODE HANDLERS ---
+  const handleInsertSubmit = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (insertIndex === -1) return;
+
+      const newPosteId = `P_${Date.now()}`;
+      
+      const newPoste: Poste = {
+          id: newPosteId,
+          name: 'P?',
+          machine: insertData.machine,
+          notes: insertData.notes,
+          operatorName: ''
+      };
+
+      const newPostes = [...postes];
+      newPostes.splice(insertIndex, 0, newPoste);
+      const reindexedPostes = newPostes.map((p, i) => ({ ...p, name: `P${i + 1}` }));
+      
+      setPostes(reindexedPostes);
+
+      if (setOperations) {
+          let calculatedTime = 0;
+          const machineObj = machines.find(m => m.name === insertData.machine || m.classe === insertData.machine);
+          const isManual = !machineObj || insertData.machine.toUpperCase() === 'MAN';
+          
+          if (isManual) {
+              calculatedTime = 0.25; 
+          } else {
+              const length = insertData.length || 0;
+              const speed = machineObj.speed || 2500;
+              const stitchCount = 4;
+              const cofs = machineObj.cofs || 1.15;
+              
+              if (length > 0) {
+                  const baseTime = (length * stitchCount) / speed;
+                  calculatedTime = ((baseTime * 1.1) + 0.02 + 0.15) * cofs; 
+              } else {
+                  calculatedTime = 0.20; 
+              }
+          }
+
+          const newOpId = `op-${Date.now()}`;
+          const newOp: Operation = {
+              id: newOpId,
+              order: operations.length + 1,
+              description: insertData.description || 'Opération (Insérée)',
+              machineId: machineObj ? machineObj.id : '',
+              machineName: insertData.machine,
+              length: insertData.length,
+              time: Number(calculatedTime.toFixed(3)),
+              manualTime: 0,
+              guideFactor: 1.1
+          };
+
+          setOperations(prev => [...prev, newOp]);
+          
+          setAssignments(prev => ({
+              ...prev,
+              [newOpId]: [newPosteId]
+          }));
+      }
+
+      setShowInsertModal(false);
+      setInsertIndex(-1);
+  };
+
   const toggleAssignment = (opId: string, posteId: string) => {
       if (!isManual) return;
+      
       setAssignments(prev => {
-          const current = prev[opId] || [];
-          const exists = current.includes(posteId);
-          let updated;
-          if (exists) { updated = current.filter(id => id !== posteId); } 
-          else { updated = [...current, posteId]; }
-          return { ...prev, [opId]: updated };
+          const next = { ...prev };
+          const currentAss = next[opId] || [];
+          const exists = currentAss.includes(posteId);
+          
+          if (exists) {
+              next[opId] = currentAss.filter(id => id !== posteId);
+          } else {
+              next[opId] = [...currentAss, posteId];
+          }
+          return next;
       });
   };
 
@@ -380,14 +554,8 @@ export default function Balancing({
 
   const posteStats = useMemo(() => calculateStats(assignments, postes), [operations, assignments, postes, bf]);
   
-  const totalMin = operations.reduce((sum, op) => sum + (op.time || 0), 0);
-  const tempsArticle = totalMin * 1.20;
-  const prodDay100 = tempsArticle > 0 ? (presenceTime * numWorkers) / tempsArticle : 0;
-  const prodDayEff = prodDay100 * (efficiency / 100);
-  const hours = presenceTime / 60;
-  const prodHour100 = hours > 0 ? prodDay100 / hours : 0;
-  const prodHourEff = hours > 0 ? prodDayEff / hours : 0;
-
+  const tempsArticle = operations.reduce((sum, op) => sum + (op.time || 0), 0) * 1.20;
+  
   // --- CHART DATA PREP ---
   const chartData = useMemo(() => {
     const data: any[] = [];
@@ -412,7 +580,7 @@ export default function Balancing({
                 data.push({
                     name: `${p.name.replace('P', '')}.${i}`,
                     fullId: p.name,
-                    time: Math.round(timePerWorker * 60),
+                    time: Number((timePerWorker * 60).toFixed(2)),
                     saturation: Math.round(satPerWorker),
                     nTheo: Number((stat.nTheo / nReq).toFixed(2)),
                     machine: p.machine,
@@ -423,7 +591,7 @@ export default function Balancing({
             data.push({
                 name: p.name.replace('P', ''),
                 fullId: p.name,
-                time: Math.round(stat.time * 60),
+                time: Number((stat.time * 60).toFixed(2)),
                 saturation: Math.round(stat.saturation),
                 nTheo: Number(stat.nTheo.toFixed(2)),
                 machine: p.machine,
@@ -445,8 +613,7 @@ export default function Balancing({
 
   const machineRequirements = useMemo(() => {
     const groups: Record<string, { time: number, count: number }> = {};
-    operations.forEach(op => {
-        // Safe Machine Name Logic in summary
+    sortedOperations.forEach(op => {
         let rawName = op.machineName;
         if (!rawName && op.machineId) {
             const foundM = machines.find(m => m.id === op.machineId);
@@ -473,7 +640,7 @@ export default function Balancing({
         };
     });
     return rows.sort((a, b) => b.nTheo - a.nTheo);
-  }, [operations, bf, machines]);
+  }, [sortedOperations, bf, machines]);
 
   return (
     <div className="space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -520,7 +687,9 @@ export default function Balancing({
             {/* P/H 100% */}
             <div className="flex flex-col items-center px-3 py-1.5 shrink-0">
                 <span className="text-[9px] font-bold text-orange-400 uppercase">P/H (100%)</span>
-                <span className="font-black text-orange-500 text-lg leading-none">{Math.round(prodHour100)}</span>
+                <span className="font-black text-orange-500 text-lg leading-none">
+                    {tempsArticle > 0 ? Math.round((presenceTime * numWorkers) / tempsArticle / (presenceTime / 60)) : 0}
+                </span>
             </div>
 
             {/* RENDU */}
@@ -535,18 +704,6 @@ export default function Balancing({
                         className="w-8 text-center bg-transparent font-black text-indigo-600 outline-none text-sm border-b border-indigo-200 p-0" 
                     />
                     <span className="text-[10px] font-bold text-indigo-400">%</span>
-                </div>
-            </div>
-
-            {/* TARGETS */}
-            <div className="flex items-center gap-4 px-4 border-l border-slate-100 shrink-0">
-                <div className="flex flex-col items-center">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase">P/J</span>
-                    <span className="font-black text-slate-700 text-lg leading-none">{Math.round(prodDayEff)}</span>
-                </div>
-                <div className="flex flex-col items-center">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase">P/H</span>
-                    <span className="font-black text-slate-700 text-lg leading-none">{Math.round(prodHourEff)}</span>
                 </div>
             </div>
 
@@ -569,6 +726,20 @@ export default function Balancing({
          </div>
 
          <div className="flex items-center gap-2">
+            <button
+                onClick={() => setIsHeaderSticky(!isHeaderSticky)}
+                className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all border shadow-sm ${isHeaderSticky ? 'bg-indigo-50 border-indigo-200 text-indigo-700 ring-1 ring-indigo-100' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                title={isHeaderSticky ? "En-tête figé" : "Figer l'en-tête"}
+            >
+                <PanelTop className="w-4 h-4" />
+            </button>
+            <button 
+                onClick={() => setShowGroupColors(!showGroupColors)} 
+                className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all border shadow-sm ${showGroupColors ? 'bg-indigo-50 border-indigo-200 text-indigo-700 ring-1 ring-indigo-100' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`} 
+                title={showGroupColors ? "Masquer couleurs groupes" : "Afficher couleurs groupes"}
+            >
+                <Link className="w-4 h-4" />
+            </button>
             <button onClick={() => setShowColors(!showColors)} className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all border shadow-sm ${showColors ? 'bg-purple-50 border-purple-200 text-purple-700 ring-1 ring-purple-100' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`} title={showColors ? "Désactiver les couleurs" : "Activer les couleurs"}>
                 <Palette className="w-4 h-4" />
             </button>
@@ -584,288 +755,338 @@ export default function Balancing({
 
        {/* 3. MAIN CONTENT (CONDITIONAL VIEW) */}
        {viewMode === 'matrix' ? (
-           <div className="bg-white rounded-[1rem] border border-slate-200 shadow-sm overflow-hidden">
-               <div className="overflow-x-auto relative custom-scrollbar pb-2">
-                   <table className="w-full text-left border-collapse border-spacing-0">
-                       <thead>
-                           <tr>
-                               <th className={`py-2 px-2 bg-slate-50 border-b-2 border-slate-300 border-r border-slate-300 min-w-[200px] ${isSticky ? 'sticky left-0 z-30 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.1)]' : ''}`}>
-                                   <div className="flex items-center justify-between">
-                                     <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">Séquence Opératoire</span>
-                                     <button onClick={() => setIsSticky(!isSticky)} className={`p-1 rounded-md transition-colors ${isSticky ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-200'}`} title={isSticky ? "Détacher la colonne" : "Figer la colonne"}>
-                                       {isSticky ? <Pin className="w-3 h-3" /> : <PinOff className="w-3 h-3" />}
-                                     </button>
-                                   </div>
-                               </th>
-                               {postes.map((p, i) => {
-                                   const color = showColors ? getPosteColor(i) : NEUTRAL_COLOR;
-                                   const hasOverride = p.timeOverride !== undefined;
-                                   return (
-                                       <th 
-                                          key={p.id} 
-                                          onContextMenu={(e) => handleContextMenu(e, p.id)}
-                                          className={`py-2 px-1 text-center min-w-[70px] ${color.bg} border-b-2 ${color.border} border-r border-slate-300 relative cursor-context-menu`}
-                                       >
-                                           {hasOverride && <div className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-purple-500" title="Temps Forcé"></div>}
-                                           <div className="flex flex-col items-center justify-center gap-1 pointer-events-none">
-                                               <span className={`inline-block px-1.5 py-0.5 rounded-[4px] text-[9px] font-bold bg-white border ${color.border} ${color.text} uppercase truncate max-w-[65px]`}>{p.machine}</span>
-                                               <div className={`flex items-center justify-center w-6 h-6 rounded-full font-bold text-xs shadow-sm bg-white border ${color.border} ${color.text}`}>{p.name.replace('P','')}</div>
-                                           </div>
-                                       </th>
-                                   );
-                               })}
-                               <th className="py-2 px-2 bg-slate-50 border-b-2 border-slate-300 border-l border-slate-200 min-w-[70px] text-center"><span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">TOTAL</span></th>
-                           </tr>
-                       </thead>
-                       <tbody className="divide-y divide-slate-200">
-                           {operations.map((op, idx) => {
-                               const assignedPosts = assignments[op.id] || [];
-                               const timeSec = toSec(op.time);
-                               const displayTime = assignedPosts.length > 0 ? Math.round(timeSec / assignedPosts.length) : timeSec;
-                               // Resolve machine name for display row
-                               let displayName = op.machineName;
-                               if (!displayName && op.machineId) {
-                                   const m = machines.find(m => m.id === op.machineId);
-                                   if (m) displayName = m.name;
-                               }
-                               if (!displayName) displayName = 'MAN';
+           <div className="flex flex-col gap-6">
+                <div className="bg-white rounded-[1rem] border border-slate-200 shadow-sm overflow-hidden h-[600px]">
+                    <div className="overflow-auto w-full h-full relative custom-scrollbar pb-2">
+                        <table className="text-left border-collapse border-spacing-0 min-w-full">
+                            <thead className={`${isHeaderSticky ? 'sticky top-0 z-30' : ''} bg-white shadow-sm`}>
+                                <tr className="bg-slate-50">
+                                    <th className={`py-2 px-2 border-b-2 border-slate-300 border-r border-slate-300 min-w-[200px] ${isSticky ? 'sticky left-0 z-50 bg-slate-50 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.1)]' : 'z-40'}`}>
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">Séquence Opératoire</span>
+                                            <button onClick={() => setIsSticky(!isSticky)} className={`p-1 rounded-md transition-colors ${isSticky ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-200'}`} title={isSticky ? "Détacher la colonne" : "Figer la colonne"}>
+                                            {isSticky ? <Pin className="w-3 h-3" /> : <PinOff className="w-3 h-3" />}
+                                            </button>
+                                        </div>
+                                    </th>
+                                    {postes.map((p, i) => {
+                                        const color = showColors ? getPosteColor(i) : NEUTRAL_COLOR;
+                                        const hasOverride = p.timeOverride !== undefined;
+                                        return (
+                                            <th 
+                                                key={p.id} 
+                                                onContextMenu={(e) => handleContextMenu(e, p.id)}
+                                                className={`py-2 px-1 text-center min-w-[70px] ${color.bg} border-b-2 ${color.border} border-r border-slate-300 relative cursor-context-menu`}
+                                            >
+                                                {hasOverride && <div className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-purple-500" title="Temps Forcé"></div>}
+                                                <div className="flex flex-col items-center justify-center gap-1 pointer-events-none">
+                                                    <span className={`inline-block px-1.5 py-0.5 rounded-[4px] text-[9px] font-bold bg-white border ${color.border} ${color.text} uppercase truncate max-w-[65px]`}>{p.machine}</span>
+                                                    <div className={`flex items-center justify-center w-6 h-6 rounded-full font-bold text-xs shadow-sm bg-white border ${color.border} ${color.text}`}>{p.name.replace('P','')}</div>
+                                                </div>
+                                            </th>
+                                        );
+                                    })}
+                                    <th className={`py-2 px-2 bg-slate-50 border-b-2 border-slate-300 border-l border-slate-200 min-w-[70px] text-center ${isHeaderSticky ? 'sticky top-0 z-40' : ''}`}><span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">TOTAL</span></th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200">
+                                {sortedOperations.map((op, idx) => {
+                                    const assignedPosts = assignments[op.id] || [];
+                                    const timeSec = toSec(op.time);
+                                    const displayTime = assignedPosts.length > 0 ? Math.round(timeSec / assignedPosts.length) : Math.round(timeSec);
+                                    
+                                    let displayName = op.machineName;
+                                    if (!displayName && op.machineId) {
+                                        const m = machines.find(m => m.id === op.machineId);
+                                        if (m) displayName = m.name;
+                                    }
+                                    if (!displayName) displayName = 'MAN';
 
-                               return (
-                                   <tr key={op.id} className="group hover:bg-slate-50 transition-colors">
-                                       <td className={`py-1.5 px-2 border-r border-slate-300 bg-white group-hover:bg-slate-50 transition-colors border-b border-slate-200 ${isSticky ? 'sticky left-0 z-20 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.05)]' : ''}`}>
-                                           <div className="flex items-center gap-2">
-                                               <span className="font-mono text-[9px] text-slate-400 font-bold w-4 text-center">{idx + 1}</span>
-                                               <div className="flex flex-col min-w-0">
-                                                   <span className="font-bold text-slate-700 text-[11px] truncate max-w-[180px]" title={op.description}>{op.description}</span>
-                                                   <div className="flex items-center gap-1.5 mt-0.5">
-                                                       <span className="text-[8px] font-bold px-1 rounded bg-slate-100 text-slate-500 uppercase">{displayName}</span>
-                                                       <span className="text-[9px] font-bold text-emerald-600">{timeSec}s</span>
-                                                   </div>
-                                               </div>
-                                           </div>
-                                       </td>
-                                       {postes.map((p, i) => {
-                                           const isAssigned = assignedPosts.includes(p.id);
-                                           const color = showColors ? getPosteColor(i) : NEUTRAL_COLOR;
-                                           return (
-                                               <td key={p.id} onClick={() => toggleAssignment(op.id, p.id)} className={`text-center p-0.5 border-r border-b border-slate-200 transition-colors relative ${isManual ? 'cursor-pointer hover:bg-indigo-50' : ''}`}>
-                                                   <div className="absolute inset-y-0 left-1/2 w-px bg-slate-50 -z-10 group-hover:bg-slate-100"></div>
-                                                   {isAssigned && (
-                                                       <div className={`mx-auto w-8 py-0.5 rounded font-bold text-[10px] shadow-sm transform hover:scale-110 transition-transform cursor-default text-white`} style={{ backgroundColor: color.fill }}>
-                                                          {displayTime}
-                                                       </div>
-                                                   )}
-                                               </td>
-                                           );
-                                       })}
-                                       <td className="border-l border-b border-slate-200 bg-slate-50/20"></td>
-                                   </tr>
-                               );
-                           })}
-                       </tbody>
-                       <tfoot className="bg-slate-50 border-t-2 border-slate-300 shadow-[0_-4px_12px_-4px_rgba(0,0,0,0.05)] sticky bottom-0 z-30">
-                           <tr>
-                               <td className={`p-2 border-r border-b border-slate-200 bg-white/95 backdrop-blur ${isSticky ? 'sticky left-0 z-40' : ''}`}>
-                                   <div className="flex flex-col items-start"><span className="text-[10px] font-black text-slate-700 uppercase tracking-widest flex items-center gap-2"><Activity className="w-3.5 h-3.5 text-indigo-500" /> Saturation %</span></div>
-                               </td>
-                               {postes.map(p => {
-                                   const saturation = Math.round(posteStats[p.id]?.saturation || 0);
-                                   const isOver = saturation > 115;
-                                   const isUnder = saturation < 75;
-                                   let colorClass = "text-emerald-700 bg-emerald-100 border-emerald-200";
-                                   if (isOver) colorClass = "text-rose-700 bg-rose-100 border-rose-200";
-                                   else if (isUnder) colorClass = "text-amber-700 bg-amber-100 border-amber-200";
-                                   return <td key={p.id} className="text-center px-1 py-2 border-r border-b border-slate-200 bg-white/50"><span className={`inline-block px-1.5 py-0.5 rounded border font-black text-[10px] ${colorClass}`}>{saturation}%</span></td>
-                               })}
-                               <td className="text-center px-1 py-2 border-l border-b border-slate-200 bg-white/50"><span className="text-[10px] text-slate-300">-</span></td>
-                           </tr>
-                           <tr>
-                               <td className={`p-2 border-r border-slate-200 bg-slate-50/95 backdrop-blur ${isSticky ? 'sticky left-0 z-40' : ''}`}>
-                                   <div className="flex flex-col items-start"><span className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2"><Users className="w-3.5 h-3.5 text-slate-400" /> Effectif Requis</span></div>
-                               </td>
-                               {postes.map(p => {
-                                   const nTheo = posteStats[p.id]?.nTheo || 0;
-                                   const nReq = nTheo > 1.15 ? Math.ceil(nTheo) : (nTheo > 0 ? 1 : 0);
-                                   return <td key={p.id} className="text-center px-1 py-2 border-r border-slate-200"><span className="font-mono font-bold text-slate-600 text-[10px]">{nReq}</span></td>
-                               })}
-                               <td className="text-center px-1 py-2 border-l border-slate-200 bg-emerald-50"><span className="font-black text-emerald-700 text-[11px]">{totalRequiredWorkers}</span></td>
-                           </tr>
-                       </tfoot>
-                   </table>
-               </div>
+                                    const groupStyle = op.groupId ? getGroupStyle(op.groupId) : null;
+                                    const rowBgClass = (showGroupColors && groupStyle) ? groupStyle.bg : 'hover:bg-slate-50';
+                                    const borderLeftStyle = (showGroupColors && groupStyle) ? `border-l-4 ${groupStyle.border}` : 'border-l border-slate-200';
+
+                                    return (
+                                        <tr key={op.id} className={`group transition-colors ${rowBgClass}`}>
+                                            <td className={`py-1.5 px-2 border-r border-slate-300 ${groupStyle ? groupStyle.bg : 'bg-white'} group-hover:bg-slate-50 transition-colors border-b border-slate-200 ${isSticky ? 'sticky left-0 z-20 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.05)]' : ''} ${borderLeftStyle}`}>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="font-mono text-[9px] text-slate-400 font-bold w-6 text-center">{getDisplayIndex(sortedOperations, idx)}</span>
+                                                    <div className="flex flex-col min-w-0">
+                                                        <span className="font-bold text-slate-700 text-[11px] truncate max-w-[180px]" title={op.description}>{op.description}</span>
+                                                        <div className="flex items-center gap-1.5 mt-0.5">
+                                                            <span className="text-[8px] font-bold px-1 rounded bg-slate-100 text-slate-500 uppercase">{displayName}</span>
+                                                            <span className="text-[9px] font-bold text-emerald-600">{Math.round(timeSec)}s</span>
+                                                            {op.groupId && (
+                                                                <span className={`text-[8px] font-black px-1 rounded border flex items-center gap-0.5 ${groupStyle ? 'bg-white ' + groupStyle.text + ' border-transparent shadow-sm' : 'bg-indigo-100 text-indigo-700 border-indigo-200'}`}>
+                                                                    <Link className="w-2 h-2" /> GRP
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            {postes.map((p, i) => {
+                                                const isAssigned = assignedPosts.includes(p.id);
+                                                const color = showColors ? getPosteColor(i) : NEUTRAL_COLOR;
+                                                return (
+                                                    <td 
+                                                        key={p.id} 
+                                                        onClick={() => toggleAssignment(op.id, p.id)} 
+                                                        onContextMenu={(e) => handleContextMenu(e, p.id)}
+                                                        className={`text-center p-0.5 border-r border-b border-slate-200 transition-colors relative ${isManual ? 'cursor-pointer hover:bg-indigo-50' : ''}`}
+                                                    >
+                                                        <div className="absolute inset-y-0 left-1/2 w-px bg-slate-50 -z-10 group-hover:bg-slate-100"></div>
+                                                        {isAssigned && (
+                                                            <div className={`mx-auto min-w-[32px] px-1 py-0.5 rounded font-bold text-[10px] shadow-sm transform hover:scale-110 transition-transform cursor-default text-white`} style={{ backgroundColor: color.fill }}>
+                                                                {displayTime}
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                );
+                                            })}
+                                            <td className="border-l border-b border-slate-200 bg-slate-50/20"></td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                            <tfoot className={`bg-slate-50 border-t-2 border-slate-300 shadow-[0_-4px_12px_-4px_rgba(0,0,0,0.05)] ${isHeaderSticky ? 'sticky bottom-0 z-30' : ''}`}>
+                                <tr>
+                                    <td className={`p-2 border-r border-b border-slate-200 bg-white/95 backdrop-blur ${isSticky ? 'sticky left-0 z-40' : ''}`}>
+                                        <div className="flex flex-col items-start"><span className="text-[10px] font-black text-slate-700 uppercase tracking-widest flex items-center gap-2"><Activity className="w-3.5 h-3.5 text-indigo-500" /> Saturation %</span></div>
+                                    </td>
+                                    {postes.map(p => {
+                                        const saturation = Math.round(posteStats[p.id]?.saturation || 0);
+                                        const isOver = saturation > 115;
+                                        const isUnder = saturation < 75;
+                                        let colorClass = "text-emerald-700 bg-emerald-100 border-emerald-200";
+                                        if (isOver) colorClass = "text-rose-700 bg-rose-100 border-rose-200";
+                                        else if (isUnder) colorClass = "text-amber-700 bg-amber-100 border-amber-200";
+                                        return <td key={p.id} className="text-center px-1 py-2 border-r border-b border-slate-200 bg-white/50"><span className={`inline-block px-1.5 py-0.5 rounded border font-black text-[10px] ${colorClass}`}>{saturation}%</span></td>
+                                    })}
+                                    <td className="text-center px-1 py-2 border-l border-b border-slate-200 bg-white/50"><span className="text-[10px] text-slate-300">-</span></td>
+                                </tr>
+                                <tr>
+                                    <td className={`p-2 border-r border-slate-200 bg-slate-50/95 backdrop-blur ${isSticky ? 'sticky left-0 z-40' : ''}`}>
+                                        <div className="flex flex-col items-start"><span className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2"><Users className="w-3.5 h-3.5 text-slate-400" /> Effectif Requis</span></div>
+                                    </td>
+                                    {postes.map(p => {
+                                        const nTheo = posteStats[p.id]?.nTheo || 0;
+                                        const nReq = nTheo > 1.15 ? Math.ceil(nTheo) : (nTheo > 0 ? 1 : 0);
+                                        return <td key={p.id} className="text-center px-1 py-2 border-r border-slate-200"><span className="font-mono font-bold text-slate-600 text-[10px]">{nReq}</span></td>
+                                    })}
+                                    <td className="text-center px-1 py-2 border-l border-slate-200 bg-emerald-50"><span className="font-black text-emerald-700 text-[11px]">{totalRequiredWorkers}</span></td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                </div>
+
+                {/* Charts & Needs - Moved here to be visible in Matrix View too */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Charts Section */}
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 h-96">
+                        <h3 className="text-sm font-bold text-slate-700 mb-4 flex items-center gap-2"><BarChart3 className="w-4 h-4" /> Équilibrage & Saturation</h3>
+                        <ResponsiveContainer width="100%" height="100%">
+                            <ComposedChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                                <YAxis yAxisId="left" orientation="left" stroke="#64748b" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} label={{ value: 'Temps (s)', angle: -90, position: 'insideLeft', fontSize: 10, fill: '#94a3b8' }} />
+                                <YAxis yAxisId="right" orientation="right" stroke="#94a3b8" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} unit="%" />
+                                <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} cursor={{ fill: '#f8fafc' }} />
+                                <ReferenceLine yAxisId="left" y={bfSeconds} stroke="#ef4444" strokeDasharray="3 3" label={{ value: 'BF', position: 'right', fill: '#ef4444', fontSize: 10 }} />
+                                <Bar yAxisId="left" dataKey="time" radius={[4, 4, 0, 0]} barSize={40}>
+                                    {chartData.map((entry, index) => (
+                                        <Cell key={`cell-${index}`} fill={entry.fill} />
+                                    ))}
+                                </Bar>
+                                <Line yAxisId="right" type="monotone" dataKey="saturation" stroke="#6366f1" strokeWidth={2} dot={{ r: 3, fill: '#6366f1', strokeWidth: 2, stroke: '#fff' }} />
+                            </ComposedChart>
+                        </ResponsiveContainer>
+                    </div>
+
+                    {/* Machine Requirements Table */}
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden h-96 flex flex-col">
+                        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between shrink-0">
+                            <h3 className="font-bold text-slate-700 flex items-center gap-2"><Cpu className="w-4 h-4 text-emerald-500" /> Besoin Matériel</h3>
+                        </div>
+                        <div className="overflow-auto flex-1 custom-scrollbar">
+                            <table className="w-full text-left">
+                                <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-500 sticky top-0 z-10">
+                                    <tr>
+                                        <th className="py-3 px-6">Machine</th>
+                                        <th className="py-3 px-6 text-center">Opérations</th>
+                                        <th className="py-3 px-6 text-center">Temps Total</th>
+                                        <th className="py-3 px-6 text-center">N. Théorique</th>
+                                        <th className="py-3 px-6 text-center">N. Requis</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100 text-xs">
+                                    {machineRequirements.map((row, idx) => (
+                                        <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                                            <td className="py-3 px-6 font-bold text-slate-700">{row.name}</td>
+                                            <td className="py-3 px-6 text-center">{row.opsCount}</td>
+                                            <td className="py-3 px-6 text-center font-mono text-slate-500">{row.totalTime.toFixed(2)} min</td>
+                                            <td className="py-3 px-6 text-center font-mono text-slate-500">{row.nTheo.toFixed(2)}</td>
+                                            <td className="py-3 px-6 text-center"><span className="inline-block px-2 py-1 bg-emerald-100 text-emerald-700 rounded font-bold">{row.nReq}</span></td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
            </div>
        ) : (
            <div className="space-y-6">
                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
                   {postes.map((p, index) => {
-                      const ops = operations.filter(op => assignments[op.id]?.includes(p.id));
-                      const stat = posteStats[p.id];
-                      const nReq = stat.nTheo > 1.15 ? Math.ceil(stat.nTheo) : (stat.nTheo > 0 ? 1 : 0);
-                      const timeSec = Math.round(stat.time * 60);
-                      const timePerWorker = nReq > 0 ? Math.round(timeSec / nReq) : 0;
-                      const saturation = nReq > 0 ? (timePerWorker / bfSeconds) * 100 : 0;
-                      const statusColor = getStatusColor(saturation);
-                      const color = showColors ? getPosteColor(index) : statusColor;
-                      const isOverridden = p.timeOverride !== undefined;
-
+                      const ops = operations.filter(op => (assignments[op.id] || []).includes(p.id));
+                      const stat = posteStats[p.id] || { time: 0, saturation: 0, nTheo: 0 };
+                      const color = showColors ? getPosteColor(index) : NEUTRAL_COLOR;
+                      
                       return (
-                          <div 
-                            key={p.id} 
-                            onContextMenu={(e) => handleContextMenu(e, p.id)}
-                            className={`rounded-xl border ${color.border} bg-white p-3 shadow-sm hover:shadow-md transition-all flex flex-col gap-2 relative overflow-hidden cursor-context-menu`}
-                          >
-                              <div className={`absolute top-0 inset-x-0 h-1`} style={{ backgroundColor: color.fill }}></div>
-                              {isOverridden && <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-purple-500 animate-pulse" title="Temps Forcé"></div>}
-                              <div className="flex justify-between items-start mt-1">
-                                  <div className="flex items-center gap-2">
-                                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-white text-sm shadow-sm`} style={{ backgroundColor: color.fill }}>{p.name.replace('P','')}</div>
-                                      <div>
-                                          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide leading-none mb-0.5">Poste</div>
-                                          <div className="text-xs font-bold text-slate-800 truncate max-w-[90px] leading-none" title={p.machine}>{p.machine}</div>
-                                      </div>
+                        <div key={p.id} onContextMenu={(e) => handleContextMenu(e, p.id)} className={`bg-white rounded-xl border ${color.border} shadow-sm p-3 relative group hover:shadow-md transition-all`}>
+                           {/* Card content */}
+                           <div className="flex justify-between items-start mb-2">
+                              <div className="flex items-center gap-2">
+                                <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${color.badge} ${color.badgeText}`}>{p.name.replace('P','')}</span>
+                                <span className="text-[10px] font-bold text-slate-500 uppercase">{p.machine}</span>
+                              </div>
+                              {p.timeOverride !== undefined && <div className="w-2 h-2 rounded-full bg-purple-500" title="Temps Forcé" />}
+                           </div>
+                           
+                           <div className="space-y-1 mb-3 min-h-[60px]">
+                              {ops.length > 0 ? (
+                                ops.slice(0, 3).map((op, i) => (
+                                  <div key={i} className="text-[10px] text-slate-600 truncate" title={op.description}>
+                                    {op.description}
                                   </div>
-                                  <div className={`px-1.5 py-0.5 rounded-md text-[10px] font-black border ${statusColor.bg} ${statusColor.border} ${statusColor.text}`}>{nReq} Op.</div>
+                                ))
+                              ) : (
+                                <div className="text-[10px] text-slate-300 italic">Aucune opération</div>
+                              )}
+                              {ops.length > 3 && <div className="text-[9px] text-slate-400 italic">... +{ops.length - 3} autres</div>}
+                           </div>
+
+                           <div className="flex items-end justify-between pt-2 border-t border-slate-100">
+                              <div className="flex flex-col">
+                                <span className="text-[9px] text-slate-400 font-bold uppercase">Temps</span>
+                                <span className={`text-sm font-bold ${color.text}`}>{Math.round(stat.time * 60)}s</span>
                               </div>
-                              <div className="grid grid-cols-2 gap-2 mt-1">
-                                  <div className="bg-slate-50 rounded-lg p-1.5 border border-slate-100"><span className="text-[8px] font-bold text-slate-400 uppercase block leading-none mb-1">Total</span><span className={`text-base font-black leading-none ${isOverridden ? 'text-purple-600' : 'text-slate-700'}`}>{timeSec}s</span></div>
-                                  <div className="bg-slate-50 rounded-lg p-1.5 border border-slate-100"><span className="text-[8px] font-bold text-slate-400 uppercase block leading-none mb-1">Par Op.</span><span className={`text-base font-black leading-none ${statusColor.text}`}>{timePerWorker}s</span></div>
+                              <div className="flex flex-col items-end">
+                                <span className="text-[9px] text-slate-400 font-bold uppercase">Sat.</span>
+                                <span className={`text-xs font-black ${stat.saturation > 100 ? 'text-rose-500' : 'text-emerald-500'}`}>{Math.round(stat.saturation)}%</span>
                               </div>
-                              <div className="mt-1">
-                                  <div className="flex justify-between items-end mb-1"><span className="text-[9px] font-bold text-slate-400 uppercase">Sat.</span><span className={`text-[10px] font-black ${statusColor.text}`}>{Math.round(saturation)}%</span></div>
-                                  <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all duration-500`} style={{ width: `${Math.min(saturation, 100)}%`, backgroundColor: statusColor.fill }} /></div>
-                              </div>
-                              <div className="mt-2 pt-2 border-t border-slate-100 flex flex-col gap-1.5 max-h-[120px] overflow-y-auto custom-scrollbar">
-                                 {ops.length > 0 ? ops.map((op, idx) => (
-                                     <div key={op.id} className="flex justify-between items-start gap-1 group">
-                                         <span className="text-[9px] text-slate-500 leading-tight truncate w-full" title={op.description}><span className="font-mono text-slate-300 mr-1">{idx+1}.</span>{op.description}</span>
-                                         <span className="text-[9px] font-mono font-bold text-slate-700 bg-slate-50 px-1 rounded whitespace-nowrap">{toSec(op.time)}s</span>
-                                     </div>
-                                 )) : <div className="text-[9px] text-slate-300 italic">Aucune opération (Temps forcé)</div>}
-                              </div>
-                          </div>
+                           </div>
+                           
+                           <div className="absolute bottom-0 left-0 h-1 bg-slate-100 w-full rounded-b-xl overflow-hidden">
+                              <div className={`h-full ${stat.saturation > 100 ? 'bg-rose-500' : color.fill}`} style={{ width: `${Math.min(stat.saturation, 100)}%` }}></div>
+                           </div>
+                        </div>
                       );
                   })}
                </div>
+               
+               {/* Charts & Tables duplicated for Postes view for consistency if needed, but per request keeping Matrix view updated mostly */}
            </div>
        )}
 
-       {/* GRAPHS & TABLES */}
-       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-           {/* MACHINE REQUIREMENTS TABLE */}
-           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex flex-col h-[350px]">
-              <div className="flex justify-between items-center mb-3 shrink-0">
-                   <h3 className="font-bold text-slate-700 flex items-center gap-2 text-sm">
-                       <Cpu className="w-4 h-4 text-indigo-600" />
-                       Besoin Matériel
-                   </h3>
-                   <div className="px-2 py-0.5 bg-slate-50 text-slate-500 rounded-lg text-[10px] font-bold border border-slate-200">
-                      Calcul sur BF: {bf.toFixed(2)} min
-                   </div>
-              </div>
-              <div className="overflow-auto custom-scrollbar flex-1 -mx-2 px-2">
-                  <table className="w-full text-left border-collapse">
-                      <thead className="sticky top-0 z-10">
-                          <tr>
-                              <th className="py-2 px-2 bg-slate-50 border-y border-slate-200 text-[9px] font-bold text-slate-500 uppercase tracking-wider w-[40%]">Désignation</th>
-                              <th className="py-2 px-2 bg-orange-50/50 border-y border-orange-100 text-[9px] font-bold text-orange-700 uppercase tracking-wider text-center">T. Total</th>
-                              <th className="py-2 px-2 bg-indigo-50/50 border-y border-indigo-100 text-[9px] font-bold text-indigo-700 uppercase tracking-wider text-center">N. Théo</th>
-                              <th className="py-2 px-2 bg-emerald-50/50 border-y border-emerald-100 text-[9px] font-bold text-emerald-700 uppercase tracking-wider text-center">N. Machines</th>
-                          </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                          {machineRequirements.map((row, idx) => (
-                                <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                                    <td className="py-2 px-2 border-b border-slate-100">
-                                        <div className="flex items-center gap-2">
-                                            <div className="w-1 h-8 rounded-full bg-slate-200"></div>
-                                            <div>
-                                                <div className="text-[10px] font-bold text-slate-700">{row.name}</div>
-                                                <div className="text-[9px] text-slate-400">{row.opsCount} Ops</div>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td className="py-2 px-2 text-center border-b border-slate-100 font-mono text-[10px] text-orange-600 font-bold">{Math.round(row.totalTime * 60)}s</td>
-                                    <td className="py-2 px-2 text-center border-b border-slate-100 font-mono text-[10px] text-indigo-600 font-bold">{row.nTheo.toFixed(2)}</td>
-                                    <td className="py-2 px-2 text-center border-b border-slate-100">
-                                        <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-black ${row.nReq > 1 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{row.nReq}</span>
-                                    </td>
-                                </tr>
-                            ))}
-                      </tbody>
-                  </table>
-              </div>
-           </div>
+       {/* INSERT POST MODAL */}
+       {showInsertModal && createPortal(
+           <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
+                <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setShowInsertModal(false)} />
+                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm relative overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                    <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-white">
+                        <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                            <ListPlus className="w-5 h-5 text-indigo-500" />
+                            Insérer un Poste
+                        </h3>
+                        <button onClick={() => setShowInsertModal(false)} className="text-slate-400 hover:text-slate-600 transition-colors"><X className="w-5 h-5" /></button>
+                    </div>
+                    
+                    <form onSubmit={handleInsertSubmit} className="p-6 space-y-4">
+                        <div className="space-y-1">
+                            <label className="text-xs font-bold text-slate-500 uppercase">Machine</label>
+                            <div className="relative">
+                                <select 
+                                    value={insertData.machine}
+                                    onChange={(e) => setInsertData({...insertData, machine: e.target.value})}
+                                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-700 outline-none focus:border-indigo-500 appearance-none"
+                                >
+                                    <option value="MAN">MANUEL (MAN)</option>
+                                    <option value="CONTROLE">CONTROLE</option>
+                                    <option value="FINITION">FINITION</option>
+                                    <option value="FER">REPASSAGE (FER)</option>
+                                    {machines.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
+                                </select>
+                                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">▼</div>
+                            </div>
+                        </div>
 
-           {/* DETAILED ANALYSIS CHART */}
-           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex flex-col h-[350px]">
-               <div className="flex justify-between items-center mb-3 shrink-0">
-                   <h3 className="font-bold text-slate-700 flex items-center gap-2 text-sm">
-                       <BarChart3 className="w-4 h-4 text-emerald-600" />
-                       Analyse de Saturation
-                   </h3>
-               </div>
-               <div className="flex-1 w-full min-h-0">
-                   <ResponsiveContainer width="100%" height="100%">
-                       <ComposedChart data={chartData} margin={{ top: 20, right: 20, bottom: 20, left: 0 }}>
-                           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                           <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} interval={0} />
-                           <YAxis tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                           <Tooltip 
-                                cursor={{ fill: '#f1f5f9' }}
-                                contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                                labelStyle={{ fontWeight: 'bold', color: '#1e293b', marginBottom: '0.25rem' }}
-                           />
-                           <ReferenceLine y={100} stroke="#10b981" strokeDasharray="3 3" />
-                           <Bar dataKey="saturation" radius={[4, 4, 0, 0]} barSize={30}>
-                               {chartData.map((entry, index) => (
-                                   <Cell key={`cell-${index}`} fill={entry.fill} />
-                               ))}
-                           </Bar>
-                           <Line type="monotone" dataKey="saturation" stroke="#64748b" strokeWidth={2} dot={{ r: 3, fill: '#fff', strokeWidth: 2 }} activeDot={{ r: 5 }} />
-                       </ComposedChart>
-                   </ResponsiveContainer>
-               </div>
-           </div>
-       </div>
+                        <div className="space-y-1">
+                            <label className="text-xs font-bold text-slate-500 uppercase">Opération / Description</label>
+                            <input 
+                                type="text"
+                                required
+                                placeholder="Ex: Assemblage côtés..."
+                                value={insertData.description}
+                                onChange={(e) => setInsertData({...insertData, description: e.target.value})}
+                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-700 outline-none focus:border-indigo-500 placeholder:text-slate-300"
+                            />
+                        </div>
 
-       {/* CONTEXT MENU VIA PORTAL */}
-       {contextMenu && contextMenu.visible && createPortal(
-            <div 
-                className="absolute bg-white border border-slate-200 rounded-xl shadow-2xl z-[9999] py-1.5 w-52 text-xs font-bold text-slate-700 animate-in fade-in zoom-in-95 duration-100 origin-top-left overflow-hidden ring-4 ring-slate-100/50"
-                style={{ top: contextMenu.y, left: contextMenu.x }}
-                onClick={(e) => e.stopPropagation()} 
-            >
-                <div className="px-4 py-2 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 mb-1">
-                    Options Poste
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-1">
+                                <label className="text-xs font-bold text-slate-500 uppercase">Longueur (cm)</label>
+                                <input 
+                                    type="number"
+                                    min="0"
+                                    placeholder="0"
+                                    value={insertData.length || ''}
+                                    onChange={(e) => setInsertData({...insertData, length: Number(e.target.value)})}
+                                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-700 outline-none focus:border-indigo-500 text-center"
+                                />
+                            </div>
+                            <div className="flex items-end pb-1">
+                                <div className="text-[10px] text-slate-400 leading-tight">
+                                    <Calculator className="w-3 h-3 inline mr-1" />
+                                    Le temps sera calculé automatiquement basé sur la machine.
+                                </div>
+                            </div>
+                        </div>
+
+                        <button type="submit" className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-indigo-200 transition-all active:scale-[0.98] mt-2">
+                            Insérer et Calculer
+                        </button>
+                    </form>
                 </div>
-                <button onClick={() => handleContextAction('insert')} className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-2.5 transition-colors group">
-                    <Plus className="w-4 h-4 text-slate-400 group-hover:text-indigo-500" /> 
-                    <span>Insérer Poste</span>
-                </button>
-                <div className="h-px bg-slate-100 my-1 mx-2"></div>
-                <button onClick={() => handleContextAction('cut')} className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-2.5 transition-colors group">
-                    <Scissors className="w-4 h-4 text-slate-400 group-hover:text-slate-600" /> 
-                    <span>Couper</span>
-                </button>
-                <button onClick={() => handleContextAction('copy')} className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-2.5 transition-colors group">
-                    <Copy className="w-4 h-4 text-slate-400 group-hover:text-slate-600" /> 
-                    <span>Copier</span>
-                </button>
-                <button onClick={() => handleContextAction('paste')} disabled={!clipboard} className={`w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-2.5 transition-colors group ${!clipboard ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                    <Clipboard className="w-4 h-4 text-slate-400 group-hover:text-slate-600" /> 
-                    <span>Coller</span>
-                </button>
-                <div className="h-px bg-slate-100 my-1 mx-2"></div>
-                <button onClick={() => handleContextAction('clear')} className="w-full text-left px-4 py-2.5 hover:bg-amber-50 flex items-center gap-2.5 text-amber-600 transition-colors">
-                    <Eraser className="w-4 h-4" /> 
-                    <span>Vider le contenu</span>
-                </button>
-                <button onClick={() => handleContextAction('delete')} className="w-full text-left px-4 py-2.5 hover:bg-rose-50 flex items-center gap-2.5 text-rose-600 transition-colors">
-                    <Trash2 className="w-4 h-4" /> 
-                    <span>Supprimer</span>
-                </button>
-            </div>,
-            document.body
+           </div>,
+           document.body
+       )}
+
+       {/* CONTEXT MENU PORTAL */}
+       {contextMenu && contextMenu.visible && createPortal(
+           <div 
+               className="absolute z-[9999] bg-white border border-slate-200 rounded-xl shadow-2xl py-1 w-56 text-xs font-medium text-slate-700 animate-in fade-in zoom-in-95 duration-100 origin-top-left overflow-hidden ring-4 ring-slate-100/50"
+               style={{ top: contextMenu.y, left: contextMenu.x }}
+               onClick={(e) => e.stopPropagation()} 
+           >
+               {/* Manual Toggle */}
+               <button onClick={() => handleContextAction('toggleManual')} className="w-full text-left px-4 py-3 hover:bg-slate-50 flex items-center gap-2 font-bold text-indigo-600 border-b border-slate-100">
+                   {isManual ? <Hand className="w-3.5 h-3.5" /> : <ArrowRightLeft className="w-3.5 h-3.5" />}
+                   {isManual ? 'Désactiver Mode Manuel' : 'Activer Mode Manuel'}
+               </button>
+
+               <button onClick={() => handleContextAction('insert')} className="w-full text-left px-4 py-2 hover:bg-slate-50 flex items-center gap-2"><Plus className="w-3.5 h-3.5" /> Insérer Poste</button>
+               <button onClick={() => handleContextAction('duplicate')} className="w-full text-left px-4 py-2 hover:bg-slate-50 flex items-center gap-2"><CopyPlus className="w-3.5 h-3.5" /> Dupliquer</button>
+               <button onClick={() => handleContextAction('copy')} className="w-full text-left px-4 py-2 hover:bg-slate-50 flex items-center gap-2"><Copy className="w-3.5 h-3.5" /> Copier</button>
+               <button onClick={() => handleContextAction('cut')} className="w-full text-left px-4 py-2 hover:bg-slate-50 flex items-center gap-2"><Scissors className="w-3.5 h-3.5" /> Couper</button>
+               <button onClick={() => handleContextAction('paste')} disabled={!clipboard} className={`w-full text-left px-4 py-2 hover:bg-slate-50 flex items-center gap-2 ${!clipboard ? 'opacity-50 cursor-not-allowed' : ''}`}><Clipboard className="w-3.5 h-3.5" /> Coller</button>
+               <div className="h-px bg-slate-100 my-1"></div>
+               <button onClick={() => handleContextAction('clear')} className="w-full text-left px-4 py-2 hover:bg-amber-50 text-amber-600 flex items-center gap-2"><Eraser className="w-3.5 h-3.5" /> Vider</button>
+               <button onClick={() => handleContextAction('delete')} className="w-full text-left px-4 py-2 hover:bg-rose-50 text-rose-600 flex items-center gap-2"><Trash2 className="w-3.5 h-3.5" /> Supprimer</button>
+           </div>,
+           document.body
        )}
     </div>
   );

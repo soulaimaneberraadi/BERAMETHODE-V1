@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo } from 'react';
 import { 
   Scissors, 
@@ -7,20 +8,20 @@ import {
   Trash2, 
   Save, 
   X, 
-  AlertTriangle,
-  Activity,
-  Gauge,
-  Settings,
-  Clock,
-  ChevronLeft,
-  ArrowRight,
-  Layers,
-  Component,
-  Info,
-  Type,
-  ToggleLeft,
-  ToggleRight,
-  CheckCircle2
+  AlertTriangle, 
+  Activity, 
+  Gauge, 
+  Settings, 
+  Clock, 
+  ChevronLeft, 
+  ArrowRight, 
+  Layers, 
+  Component, 
+  Info, 
+  Type, 
+  ToggleLeft, 
+  ToggleRight, 
+  CheckCircle2 
 } from 'lucide-react';
 import { Machine, SpeedFactor, ComplexityFactor, StandardTime, Guide } from '../types';
 
@@ -255,7 +256,7 @@ export default function Machin({
     desc, 
     icon: Icon, 
     colorClass, 
-    bgClass,
+    bgClass, 
     onClick 
   }: { 
     title: string, 
@@ -282,7 +283,7 @@ export default function Machin({
   );
 
   return (
-    <div className="space-y-6 pb-20">
+    <div className="h-full w-full overflow-y-auto p-4 md:p-6 custom-scrollbar space-y-6 pb-24">
       
       {/* HEADER WITH NAVIGATION */}
       <div className="flex flex-col gap-6">

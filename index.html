@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
   <head>
@@ -11,6 +12,18 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <link rel="stylesheet" href="/index.css">
+    <style>
+      /* Hide scrollbars globally but keep functionality */
+      ::-webkit-scrollbar {
+        display: none;
+        width: 0;
+        background: transparent;
+      }
+      * {
+        -ms-overflow-style: none; /* IE and Edge */
+        scrollbar-width: none; /* Firefox */
+      }
+    </style>
   <script type="importmap">
 {
   "imports": {

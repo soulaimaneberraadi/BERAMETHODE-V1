@@ -8,9 +8,13 @@ import {
   LayoutTemplate, 
   Banknote, 
   Save,
-  ArrowRight,
   CheckCircle2,
-  ChevronRight
+  ChevronRight, 
+  ArrowRight, 
+  Check,
+  RotateCcw,
+  Undo2,
+  Redo2
 } from 'lucide-react';
 
 import FicheTechnique from './FicheTechnique';
@@ -20,7 +24,7 @@ import Balancing from './Balancing';
 import Implantation from './Implantation';
 import CostCalculator from './CostCalculator';
 
-import { Machine, Operation, ComplexityFactor, StandardTime, Guide, Poste, FicheData } from '../types';
+import { Machine, Operation, ComplexityFactor, StandardTime, Guide, Poste, FicheData, Material } from '../types';
 
 interface ModelWorkflowProps {
   // Shared Data Props
@@ -63,6 +67,12 @@ interface ModelWorkflowProps {
 
   // Actions
   onSaveToLibrary: () => void;
+  
+  // Undo/Redo Props
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
 }
 
 export default function ModelWorkflow({
@@ -71,10 +81,23 @@ export default function ModelWorkflow({
   ficheData, setFicheData, ficheImages, setFicheImages,
   assignments, setAssignments, postes, setPostes,
   isAutocompleteEnabled, userVocabulary, setUserVocabulary,
-  onSaveToLibrary
+  onSaveToLibrary,
+  onUndo, onRedo, canUndo, canRedo
 }: ModelWorkflowProps) {
 
+  // Current Step State
   const [currentStep, setCurrentStep] = useState<'fiche' | 'gamme' | 'analyse' | 'equilibrage' | 'implantation' | 'couts'>('fiche');
+  
+  // FABRIC SETTINGS STATE (Lifted Up)
+  const [fabricSettings, setFabricSettings] = useState<{
+      enabled: boolean;
+      selected: 'easy' | 'medium' | 'hard';
+      values: { easy: number; medium: number; hard: number };
+  }>({
+      enabled: false,
+      selected: 'easy',
+      values: { easy: 0, medium: 3, hard: 6 }
+  });
 
   const steps = [
     { id: 'fiche', label: '1. Fiche Technique', icon: FileText },
@@ -85,145 +108,222 @@ export default function ModelWorkflow({
     { id: 'couts', label: '6. Coûts & Budget', icon: Banknote },
   ];
 
-  const handleNext = () => {
+  // Navigation Helper
+  const navigateTo = (stepId: string) => {
+      setCurrentStep(stepId as any);
+  };
+
+  // Handle Refresh (Scroll to top)
+  const handleRefresh = () => {
+      const scrollContainer = document.getElementById('workflow-content');
+      if (scrollContainer) {
+          scrollContainer.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+  };
+
+  // Linear "Next" Button (Process Flow)
+  const handleLinearNext = () => {
+    // Check validation for Step 1
+    if (currentStep === 'fiche') {
+        if (!ficheData.category || !ficheData.category.trim()) {
+            alert("La catégorie du modèle est obligatoire (ex: T-Shirt, Robe...).");
+            return;
+        }
+    }
+
     const currentIndex = steps.findIndex(s => s.id === currentStep);
     if (currentIndex < steps.length - 1) {
-        setCurrentStep(steps[currentIndex + 1].id as any);
+        navigateTo(steps[currentIndex + 1].id);
     }
   };
 
+  const currentIndex = steps.findIndex(s => s.id === currentStep);
+  const isLastStep = currentIndex === steps.length - 1;
+
   return (
-    <div className="flex flex-col h-full bg-slate-50/50">
-      
-      {/* WORKFLOW HEADER */}
-      <div className="bg-white border-b border-slate-200 sticky top-0 z-40 px-4 pt-4 pb-0 shadow-sm">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4">
-            <div>
-                <h2 className="text-xl font-black text-slate-800 flex items-center gap-2">
-                    <span className="bg-slate-900 text-white px-2 py-1 rounded text-xs uppercase tracking-widest">Atelier</span>
-                    {articleName || 'Nouveau Modèle'}
-                </h2>
-                <p className="text-xs text-slate-500 font-medium mt-1">Conception et Industrialisation</p>
+    <div className="flex flex-col h-full overflow-hidden">
+        
+        {/* STEPPER HEADER + NAVIGATION */}
+        <div className="bg-white border-b border-slate-200 px-4 py-3 shrink-0 flex items-center justify-between gap-4 shadow-sm z-20">
+            
+            {/* DATA UNDO/REDO NAVIGATION (Left) */}
+            <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-lg border border-slate-200 shrink-0 mr-2 shadow-sm">
+                <button
+                    onClick={onUndo}
+                    disabled={!canUndo}
+                    className={`p-1.5 rounded-md transition-all ${
+                        !canUndo 
+                        ? 'text-slate-300 cursor-not-allowed bg-slate-50' 
+                        : 'text-slate-600 hover:bg-white hover:text-indigo-600 hover:shadow-sm active:scale-95'
+                    }`}
+                    title="Annuler (Ctrl+Z)"
+                >
+                    <Undo2 className="w-4 h-4" />
+                </button>
+                <button
+                    onClick={onRedo}
+                    disabled={!canRedo}
+                    className={`p-1.5 rounded-md transition-all ${
+                        !canRedo 
+                        ? 'text-slate-300 cursor-not-allowed bg-slate-50' 
+                        : 'text-slate-600 hover:bg-white hover:text-indigo-600 hover:shadow-sm active:scale-95'
+                    }`}
+                    title="Rétablir (Ctrl+Y)"
+                >
+                    <Redo2 className="w-4 h-4" />
+                </button>
+                <div className="w-px h-4 bg-slate-200 mx-0.5"></div>
+                <button
+                    onClick={handleRefresh}
+                    className="p-1.5 rounded-md text-slate-600 hover:bg-white hover:text-emerald-600 transition-all hover:shadow-sm active:scale-95"
+                    title="Actualiser la vue"
+                >
+                    <RotateCcw className="w-4 h-4" />
+                </button>
             </div>
-            <div className="flex items-center gap-2">
-                <div className="px-3 py-1.5 bg-slate-100 rounded-lg border border-slate-200 flex flex-col items-end">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase">Temps Total</span>
-                    <span className="font-mono font-bold text-slate-700 text-xs">{globalStats.tempsArticle.toFixed(2)} min</span>
+
+            {/* CENTER: STEPS LIST (Scrollable) */}
+            <div className="flex-1 flex items-center justify-center overflow-hidden">
+                <div className="flex items-center gap-1 overflow-x-auto no-scrollbar max-w-full px-2">
+                    {steps.map((step, index) => {
+                        const isActive = currentStep === step.id;
+                        const isPast = steps.findIndex(s => s.id === currentStep) > index;
+                        return (
+                            <React.Fragment key={step.id}>
+                                <button 
+                                    onClick={() => navigateTo(step.id)}
+                                    className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                                        isActive 
+                                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200' 
+                                        : isPast 
+                                            ? 'text-emerald-600 bg-emerald-50/50 hover:bg-emerald-100' 
+                                            : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'
+                                    }`}
+                                >
+                                    {isPast ? <CheckCircle2 className="w-3.5 h-3.5" /> : <step.icon className={`w-3.5 h-3.5 ${isActive ? 'text-indigo-200' : 'text-slate-400'}`} />}
+                                    <span className="hidden md:inline">{step.label.split('. ')[1]}</span>
+                                    <span className="md:hidden">{index + 1}</span>
+                                </button>
+                                {index < steps.length - 1 && <div className="w-4 h-px bg-slate-200 shrink-0 hidden sm:block"></div>}
+                            </React.Fragment>
+                        );
+                    })}
                 </div>
+            </div>
+            
+            {/* RIGHT: ACTIONS (Detached) */}
+            <div className="flex items-center gap-2 shrink-0">
                 <button 
                     onClick={onSaveToLibrary}
-                    className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-md shadow-emerald-200 transition-all active:scale-95"
+                    className="flex items-center gap-2 px-3 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl text-xs font-bold shadow-sm transition-all"
+                    title="Sauvegarder"
                 >
                     <Save className="w-4 h-4" />
-                    <span>Enregistrer le Modèle</span>
+                    <span className="hidden xl:inline">Sauvegarder</span>
+                </button>
+
+                <button 
+                    onClick={isLastStep ? onSaveToLibrary : handleLinearNext}
+                    className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all shadow-sm ${
+                        isLastStep 
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-200 hover:shadow-emerald-300' 
+                        : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-200 hover:shadow-indigo-300'
+                    }`}
+                >
+                    <span className="hidden sm:inline">{isLastStep ? "Terminer" : "Suivant"}</span>
+                    {isLastStep ? <Check className="w-4 h-4" /> : <ArrowRight className="w-4 h-4" />}
                 </button>
             </div>
         </div>
 
-        {/* TABS SCROLL */}
-        <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pb-0">
-            {steps.map((step, idx) => {
-                const isActive = currentStep === step.id;
-                const isPast = steps.findIndex(s => s.id === currentStep) > idx;
+        {/* CONTENT AREA */}
+        <div className="flex-1 overflow-hidden relative bg-slate-50/50">
+            <div id="workflow-content" className="absolute inset-0 p-4 sm:p-6 lg:p-8 overflow-y-auto custom-scrollbar">
                 
-                return (
-                    <button
-                        key={step.id}
-                        onClick={() => setCurrentStep(step.id as any)}
-                        className={`
-                            relative flex items-center gap-2 px-4 py-3 text-xs font-bold transition-all border-b-2 whitespace-nowrap
-                            ${isActive ? 'border-indigo-600 text-indigo-700 bg-indigo-50/50 rounded-t-lg' : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50 rounded-t-lg'}
-                        `}
-                    >
-                        <div className={`p-1 rounded-full ${isActive ? 'bg-indigo-100 text-indigo-600' : (isPast ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-200 text-slate-400')}`}>
-                            {isPast ? <CheckCircle2 className="w-3 h-3" /> : <step.icon className="w-3 h-3" />}
-                        </div>
-                        {step.label}
-                    </button>
-                );
-            })}
-        </div>
-      </div>
-
-      {/* CONTENT AREA */}
-      <div className="flex-1 overflow-y-auto p-4 md:p-6 custom-scrollbar">
-        <div className="max-w-[1600px] mx-auto min-h-full">
-            
-            {currentStep === 'fiche' && (
-                <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
+                {currentStep === 'fiche' && (
                     <FicheTechnique 
                         data={ficheData} setData={setFicheData}
                         articleName={articleName} setArticleName={setArticleName}
-                        totalTime={globalStats.totalTime} tempsArticle={globalStats.tempsArticle}
+                        totalTime={globalStats.totalTime}
+                        tempsArticle={globalStats.tempsArticle}
                         numWorkers={numWorkers} setNumWorkers={setNumWorkers}
                         efficiency={efficiency} setEfficiency={setEfficiency}
                         images={ficheImages} setImages={setFicheImages}
-                        onNext={handleNext}
+                        onNext={handleLinearNext}
                     />
-                </div>
-            )}
+                )}
 
-            {currentStep === 'gamme' && (
-                <div className="animate-in fade-in slide-in-from-right-4 duration-300">
+                {currentStep === 'gamme' && (
                     <Gamme 
-                        machines={machines} operations={operations} setOperations={setOperations}
+                        machines={machines}
+                        operations={operations} setOperations={setOperations}
                         articleName={articleName} setArticleName={setArticleName}
                         efficiency={efficiency} setEfficiency={setEfficiency}
                         numWorkers={numWorkers} setNumWorkers={setNumWorkers}
                         presenceTime={presenceTime} setPresenceTime={setPresenceTime}
-                        bf={globalStats.bf} complexityFactors={complexityFactors}
-                        standardTimes={standardTimes} guides={guides}
+                        bf={bf}
+                        complexityFactors={complexityFactors}
+                        standardTimes={standardTimes}
+                        guides={guides}
                         isAutocompleteEnabled={isAutocompleteEnabled}
                         userVocabulary={userVocabulary} setUserVocabulary={setUserVocabulary}
+                        // Pass fabric settings
+                        fabricSettings={fabricSettings}
+                        setFabricSettings={setFabricSettings}
                     />
-                    <div className="flex justify-end mt-4">
-                        <button onClick={handleNext} className="flex items-center gap-2 text-indigo-600 font-bold text-sm hover:underline">
-                            Continuer vers Analyse <ArrowRight className="w-4 h-4" />
-                        </button>
-                    </div>
-                </div>
-            )}
+                )}
 
-            {currentStep === 'analyse' && (
-                <div className="animate-in fade-in slide-in-from-right-4 duration-300">
+                {currentStep === 'analyse' && (
                     <AnalyseTechnologique 
-                        machines={machines} operations={operations} setOperations={setOperations}
-                        articleName={articleName} efficiency={efficiency} setEfficiency={setEfficiency}
+                        machines={machines}
+                        operations={operations} setOperations={setOperations}
+                        articleName={articleName}
+                        efficiency={efficiency} setEfficiency={setEfficiency}
                         numWorkers={numWorkers} setNumWorkers={setNumWorkers}
                         presenceTime={presenceTime} setPresenceTime={setPresenceTime}
-                        bf={globalStats.bf} complexityFactors={complexityFactors} standardTimes={standardTimes}
+                        bf={bf}
+                        complexityFactors={complexityFactors}
+                        standardTimes={standardTimes}
+                        // Pass fabric settings
+                        fabricSettings={fabricSettings}
                     />
-                </div>
-            )}
+                )}
 
-            {currentStep === 'equilibrage' && (
-                <div className="animate-in fade-in slide-in-from-right-4 duration-300">
+                {currentStep === 'equilibrage' && (
                     <Balancing 
-                        operations={operations} efficiency={efficiency} setEfficiency={setEfficiency}
-                        bf={globalStats.bf} articleName={articleName}
+                        operations={operations}
+                        efficiency={efficiency} setEfficiency={setEfficiency}
+                        bf={bf}
+                        articleName={articleName}
                         numWorkers={numWorkers} setNumWorkers={setNumWorkers}
                         presenceTime={presenceTime} setPresenceTime={setPresenceTime}
                         assignments={assignments} setAssignments={setAssignments}
-                        postes={postes} setPostes={setPostes} machines={machines}
+                        postes={postes} setPostes={setPostes}
+                        machines={machines}
                     />
-                </div>
-            )}
+                )}
 
-            {currentStep === 'implantation' && (
-                <div className="animate-in fade-in slide-in-from-right-4 duration-300 h-full">
+                {currentStep === 'implantation' && (
                     <Implantation 
-                        bf={globalStats.bf} operations={operations}
+                        bf={bf}
+                        operations={operations}
+                        setOperations={setOperations}
                         numWorkers={numWorkers} setNumWorkers={setNumWorkers}
                         presenceTime={presenceTime} setPresenceTime={setPresenceTime}
                         efficiency={efficiency} setEfficiency={setEfficiency}
                         articleName={articleName}
-                        assignments={assignments} postes={postes} setPostes={setPostes} machines={machines}
+                        assignments={assignments}
+                        postes={postes} setPostes={setPostes}
+                        machines={machines}
+                        speedFactors={speedFactors}
+                        complexityFactors={complexityFactors}
+                        standardTimes={standardTimes}
+                        fabricSettings={fabricSettings}
+                        onSave={onSaveToLibrary}
                     />
-                </div>
-            )}
+                )}
 
-            {currentStep === 'couts' && (
-                <div className="animate-in fade-in slide-in-from-right-4 duration-300">
+                {currentStep === 'couts' && (
                     <CostCalculator 
                         initialArticleName={articleName}
                         initialTotalTime={globalStats.tempsArticle}
@@ -231,11 +331,10 @@ export default function ModelWorkflow({
                         initialDate={ficheData.date}
                         initialCostMinute={ficheData.costMinute}
                     />
-                </div>
-            )}
+                )}
 
+            </div>
         </div>
-      </div>
     </div>
   );
 }
