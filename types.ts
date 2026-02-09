@@ -84,6 +84,20 @@ export type Poste = {
   length?: number;
   isPlaced?: boolean; // New field for manual mode state
   colorName?: string; // New field for persistent color assignment
+  // Free Mode Props
+  x?: number; 
+  y?: number;
+  rotation?: number; // Rotation in degrees
+  shape?: 'rect' | 'circle' | 'zone'; // Visual shape
+  width?: number; // For resizing (future)
+  height?: number; // For resizing (future)
+};
+
+export type SavedLayout = {
+  id: string;
+  name: string;
+  date: string;
+  postes: Poste[];
 };
 
 export type FicheData = {
@@ -146,7 +160,8 @@ export interface Translations {
 export interface ModelData {
   id: string;
   filename: string;
-  image?: string | null; // Added Image
+  image?: string | null; // Thumbnail (Front)
+  images?: { front: string | null; back: string | null }; // NEW: Store both images fully
   meta_data: {
     nom_modele: string;
     category?: string; // Added Category for search and display

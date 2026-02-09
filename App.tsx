@@ -5,7 +5,10 @@ import {
   FolderOpen, 
   Settings as SettingsIcon, 
   Bell,
-  Search
+  Search,
+  Save,
+  CheckCircle2,
+  CloudOff
 } from 'lucide-react';
 import ModelWorkflow from './components/ModelWorkflow';
 import Library from './components/Library';
@@ -56,6 +59,8 @@ const DEFAULT_GUIDES: Guide[] = [
     { id: 'g15', name: 'Guide Ceinture', category: 'Guides & Jauges', machineType: 'Piqueuse Double Aig (316)', description: 'Pour montage ceinture (Samta).', useCase: 'Jeans, Pantalon' }
 ];
 
+const AUTO_SAVE_KEY = 'beramethode_autosave_v1';
+
 // History State Type
 type HistoryState = {
   operations: Operation[];
@@ -88,6 +93,7 @@ export default function App() {
   const [efficiency, setEfficiency] = useState(85);
   const [numWorkers, setNumWorkers] = useState(1);
   const [presenceTime, setPresenceTime] = useState(480); // 8 hours in mins
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
   
   // CORE MODEL STATE
   const [operations, setOperations] = useState<Operation[]>([]);
@@ -183,6 +189,73 @@ export default function App() {
   
   const [ficheImages, setFicheImages] = useState<{ front: string | null; back: string | null }>({ front: null, back: null });
 
+  // --- AUTO-SAVE LOGIC ---
+  
+  // 1. Load from LocalStorage on Mount
+  useEffect(() => {
+    const savedData = localStorage.getItem(AUTO_SAVE_KEY);
+    if (savedData) {
+      try {
+        const parsed = JSON.parse(savedData);
+        // Only load if there is meaningful data
+        if (parsed.articleName || parsed.operations?.length > 0) {
+          console.log("Loading Auto-Save...");
+          if (parsed.currentModelId) setCurrentModelId(parsed.currentModelId);
+          if (parsed.articleName) setArticleName(parsed.articleName);
+          if (parsed.operations) setOperations(parsed.operations);
+          if (parsed.assignments) setAssignments(parsed.assignments);
+          if (parsed.postes) setPostes(parsed.postes);
+          if (parsed.ficheData) setFicheData(parsed.ficheData);
+          if (parsed.ficheImages) setFicheImages(parsed.ficheImages);
+          if (parsed.efficiency) setEfficiency(parsed.efficiency);
+          if (parsed.numWorkers) setNumWorkers(parsed.numWorkers);
+          if (parsed.presenceTime) setPresenceTime(parsed.presenceTime);
+          
+          // Re-init history with loaded state
+          setHistory([{ 
+            operations: parsed.operations || [], 
+            assignments: parsed.assignments || {}, 
+            postes: parsed.postes || [] 
+          }]);
+          setHistoryIndex(0);
+        }
+      } catch (e) {
+        console.error("Failed to load auto-save", e);
+      }
+    }
+  }, []);
+
+  // 2. Save to LocalStorage on Change (Debounced)
+  useEffect(() => {
+    setSaveStatus('saving');
+    const timer = setTimeout(() => {
+      const dataToSave = {
+        currentModelId,
+        articleName,
+        operations,
+        assignments,
+        postes,
+        ficheData,
+        ficheImages,
+        efficiency,
+        numWorkers,
+        presenceTime,
+        lastSaved: Date.now()
+      };
+      
+      try {
+        localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify(dataToSave));
+        setSaveStatus('saved');
+      } catch (e) {
+        console.error("Auto-save failed (likely quota exceeded)", e);
+        setSaveStatus('unsaved');
+      }
+    }, 2000); // Save after 2 seconds of inactivity
+
+    return () => clearTimeout(timer);
+  }, [currentModelId, articleName, operations, assignments, postes, ficheData, ficheImages, efficiency, numWorkers, presenceTime]);
+
+
   // --- DERIVED STATS ---
   const globalStats = useMemo(() => {
       const totalTime = operations.reduce((acc, op) => acc + (op.time || 0), 0);
@@ -226,7 +299,8 @@ export default function App() {
       const modelToSave: ModelData = {
           id: currentModelId || Date.now().toString(),
           filename: `${articleName || 'Sans_Nom'}.json`,
-          image: ficheImages.front,
+          image: ficheImages.front, // Thumbnail
+          images: ficheImages,      // FULL IMAGES (Front + Back)
           meta_data: {
               nom_modele: articleName || 'Sans Nom',
               category: ficheData.category,
@@ -269,7 +343,16 @@ export default function App() {
       setOperations(model.gamme_operatoire || []);
       setNumWorkers(model.meta_data.effectif || 1);
       setFicheData(prev => ({ ...prev, date: new Date().toISOString().split('T')[0], category: model.meta_data.category || '' }));
-      if (model.image) setFicheImages({ front: model.image, back: null });
+      
+      // RESTORE IMAGES
+      if (model.images) {
+          setFicheImages(model.images);
+      } else if (model.image) {
+          // Legacy support for single image
+          setFicheImages({ front: model.image, back: null });
+      } else {
+          setFicheImages({ front: null, back: null });
+      }
       
       // RESTORE IMPLANTATION IF AVAILABLE
       if (model.implantation) {
@@ -323,6 +406,9 @@ export default function App() {
   };
 
   const createNewProject = () => {
+      // Clear Local Storage
+      localStorage.removeItem(AUTO_SAVE_KEY);
+      
       setCurrentModelId(null); // Reset ID for new project
       setArticleName('');
       setOperations([]);
@@ -351,6 +437,28 @@ export default function App() {
                     <span className="font-extrabold text-lg tracking-tight text-gray-900 hidden sm:block">
                         BERA<span className="text-emerald-600">METHODE</span>
                     </span>
+                    
+                    {/* AUTO-SAVE INDICATOR */}
+                    {currentView === 'atelier' && (
+                        <div className="ml-4 flex items-center gap-1.5 px-2 py-1 bg-slate-50 rounded-full border border-slate-100">
+                            {saveStatus === 'saved' ? (
+                                <>
+                                    <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                                    <span className="text-[10px] font-bold text-slate-400 hidden md:inline">Sauvegardé</span>
+                                </>
+                            ) : saveStatus === 'saving' ? (
+                                <>
+                                    <div className="w-3 h-3 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"></div>
+                                    <span className="text-[10px] font-bold text-indigo-400 hidden md:inline">Enregistrement...</span>
+                                </>
+                            ) : (
+                                <>
+                                    <CloudOff className="w-3 h-3 text-amber-500" />
+                                    <span className="text-[10px] font-bold text-amber-500 hidden md:inline">Non enregistré</span>
+                                </>
+                            )}
+                        </div>
+                    )}
                 </div>
 
                 {/* Main Navigation - Compact Pills */}

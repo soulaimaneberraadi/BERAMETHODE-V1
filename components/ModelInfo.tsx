@@ -1,7 +1,9 @@
-import React from 'react';
-import { Shirt, Clock, Coins, Scissors, Package, CheckSquare, ImageIcon, X, Upload, Trash2, Camera, Check, Calendar, Plus } from 'lucide-react';
+
+import React, { useState } from 'react';
+import { Shirt, Clock, Coins, Scissors, Package, CheckSquare, ImageIcon, X, Upload, Trash2, Camera, Check, Calendar, Plus, Loader2 } from 'lucide-react';
 import { AppSettings } from '../types';
 import { fmt } from '../constants';
+import { compressImage } from '../utils';
 
 interface ModelInfoProps {
   t: any;
@@ -37,15 +39,20 @@ const ModelInfo: React.FC<ModelInfoProps> = ({
   toggleCostMinute, handleInstantSettingChange, handleTempSettingChange,
   inputBg, textPrimary, textSecondary, bgCard, bgCardHeader
 }) => {
+  const [isProcessing, setIsProcessing] = useState(false);
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setProductImage(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+      setIsProcessing(true);
+      try {
+        const compressed = await compressImage(file);
+        setProductImage(compressed);
+      } catch (err) {
+        console.error("Compression error", err);
+      } finally {
+        setIsProcessing(false);
+      }
     }
   };
 
@@ -190,7 +197,12 @@ const ModelInfo: React.FC<ModelInfoProps> = ({
                     
                     <input type="file" accept="image/*" onChange={handleImageUpload} className="absolute inset-0 w-full h-full opacity-0 z-20 cursor-pointer" />
                     
-                    {productImage ? (
+                    {isProcessing ? (
+                        <div className="flex flex-col items-center text-blue-500">
+                            <Loader2 className="w-8 h-8 animate-spin mb-2" />
+                            <span className="text-xs font-bold">Compression...</span>
+                        </div>
+                    ) : productImage ? (
                         <>
                             <img src={productImage} alt="Product" className="w-full h-full object-contain p-2 z-10" />
                             <div className="absolute inset-0 bg-black/50 z-20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">

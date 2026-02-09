@@ -1,7 +1,7 @@
 
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { Operation, Poste, Machine, ComplexityFactor, StandardTime } from '../types';
+import { Operation, Poste, Machine, ComplexityFactor, StandardTime, SavedLayout } from '../types';
 import ExcelInput from './ExcelInput';
 import { 
   Zap, 
@@ -37,6 +37,7 @@ import {
   ArrowUp, 
   ArrowLeftRight, 
   Eye, 
+  EyeOff,
   ArrowRightLeft, 
   Clock, 
   Sparkles, 
@@ -75,7 +76,15 @@ import {
   LayoutGrid,
   SquareDashed,
   Magnet,
-  ListOrdered
+  ListOrdered,
+  MessageSquare,
+  MousePointerClick,
+  Move,
+  RotateCw,
+  BoxSelect,
+  Circle,
+  Square,
+  FolderOpen
 } from 'lucide-react';
 
 interface ImplantationProps {
@@ -103,7 +112,15 @@ interface ImplantationProps {
   onSave?: () => void;
 }
 
-// --- GROUP COLOR PALETTE (IMPORTED FROM GAMME/BALANCING) ---
+// --- LINK DATA TYPE ---
+type ManualLink = {
+    id: string;
+    from: string; // Poste ID
+    to: string;   // Poste ID
+    label?: string; // Optional Comment
+};
+
+// --- GROUP COLOR PALETTE ---
 const GROUP_COLORS = [
   { bg: 'bg-indigo-50', border: 'border-indigo-500', text: 'text-indigo-700' },
   { bg: 'bg-orange-50', border: 'border-orange-500', text: 'text-orange-700' },
@@ -129,7 +146,7 @@ const getGroupStyle = (groupId: string) => {
     return GROUP_COLORS[index];
 };
 
-// --- COLOR PALETTE (SYNCHRONIZED WITH BALANCING) ---
+// --- COLOR PALETTE ---
 const POSTE_COLORS = [
   { name: 'indigo',  bg: 'bg-indigo-50',  border: 'border-indigo-200',  text: 'text-indigo-700',  badge: 'bg-indigo-100',  fill: '#6366f1', badgeText: 'text-indigo-800' },
   { name: 'orange',  bg: 'bg-orange-50',  border: 'border-orange-200',  text: 'text-orange-700',  badge: 'bg-orange-100',  fill: '#f97316', badgeText: 'text-orange-800' },
@@ -153,57 +170,36 @@ const SPECIAL_COLORS = {
 };
 
 const getPosteColor = (index: number, machineName: string, colorName?: string) => {
-  // 0. Empty Slot Check
   if (machineName === 'VIDE') return SPECIAL_COLORS.vide;
-
-  // 1. Priority: Persistent Color Name (from Balancing)
   if (colorName) {
       const found = POSTE_COLORS.find(c => c.name === colorName);
       if (found) return found;
   }
-
-  // 2. Fallback: Special Machines
   const name = machineName.toUpperCase();
   if (name.includes('CONTROL') || name.includes('CONTROLE')) return SPECIAL_COLORS.controle;
   if (name.includes('FER') || name.includes('REPASSAGE')) return SPECIAL_COLORS.fer;
   if (name.includes('FINITION')) return SPECIAL_COLORS.finition;
-  
-  // 3. Fallback: Index
   return POSTE_COLORS[index % POSTE_COLORS.length];
 };
 
 interface Workstation extends Poste {
   index: number;
-  originalIndex: number; // Index in the main 'postes' array
+  originalIndex: number;
   operations: Operation[];
   totalTime: number;
   saturation: number;
   operators: number;
   color: typeof POSTE_COLORS[0];
-  groups: string[]; // List of Group IDs present in this station
-  // Flow properties
-  feedsInto?: string; // ID of station this station feeds into
-  isFeeder?: boolean; // True if this station feeds another
-  targetStationName?: string; // For display
-  gammeOrderMin: number; // The lowest operation order in this station (for sorting fallback)
-  // Manual Assignment
+  groups: string[];
+  feedsInto?: string;
+  isFeeder?: boolean;
+  targetStationName?: string;
+  gammeOrderMin: number;
   isPlaced?: boolean;
-  status?: 'ok' | 'panne'; // New Status
+  status?: 'ok' | 'panne';
 }
 
-// ... (Connectors components remain the same) ...
-const ConnectorVertical = ({ active = false, passed = false }) => {
-    return null;
-};
-const ConnectorHorizontal = ({ active = false, passed = false }) => {
-    return null;
-};
-const ConnectorDiagonal = ({ active = false, passed = false }) => {
-    return null;
-};
-const ConnectorVerticalLong = ({ active = false, passed = false }) => {
-    return null;
-};
+// --- HELPER COMPONENTS ---
 
 const DimensionMarkerHorizontal = ({ label }: { label: string }) => (
     <div className="flex flex-col items-center w-full px-2 opacity-70 scale-90">
@@ -214,6 +210,7 @@ const DimensionMarkerHorizontal = ({ label }: { label: string }) => (
         </div>
     </div>
 );
+
 const DimensionMarkerVertical = ({ label, height = 'h-full' }: { label: string, height?: string }) => (
     <div className={`flex flex-row items-center justify-center ${height} opacity-70 scale-90`}>
         <div className="flex flex-col items-center h-full text-[8px] text-slate-500 font-mono font-bold whitespace-nowrap">
@@ -223,6 +220,7 @@ const DimensionMarkerVertical = ({ label, height = 'h-full' }: { label: string, 
         </div>
     </div>
 );
+
 const SpecialZoneControl = ({ label, type, icon: Icon, color, currentCount, onAdd, onRemove }: any) => (
     <div className={`flex items-center gap-2 px-2 py-0.5 rounded-lg border ${color.bg} ${color.border} shadow-sm transition-colors`}>
         <div className={`flex items-center gap-1 ${color.text}`}><Icon className="w-3 h-3" /><span className="text-[9px] font-bold uppercase">{label}</span></div>
@@ -233,6 +231,181 @@ const SpecialZoneControl = ({ label, type, icon: Icon, color, currentCount, onAd
         </div>
     </div>
 );
+
+// --- LINK OVERLAY COMPONENT (SVG) - FIX FINAL ---
+const LinkOverlay = ({ 
+    links, 
+    stations, 
+    showLinks,
+    zoom,
+    containerRef,
+    onRemoveLink,
+    onEditLabel
+}: { 
+    links: ManualLink[], 
+    stations: Workstation[], 
+    showLinks: boolean,
+    zoom: number,
+    containerRef: React.RefObject<HTMLDivElement>,
+    onRemoveLink: (id: string) => void,
+    onEditLabel: (id: string, currentLabel?: string) => void
+}) => {
+    const [paths, setPaths] = useState<{ id: string, path: string, labelX: number, labelY: number, label?: string }[]>([]);
+
+    const calculatePaths = useCallback(() => {
+        if (!showLinks || !containerRef.current) {
+            setPaths([]);
+            return;
+        }
+
+        const container = containerRef.current;
+        const cRect = container.getBoundingClientRect();
+        
+        const newPaths = links.map(link => {
+            const fromEl = document.getElementById(`station-card-${link.from}`);
+            const toEl = document.getElementById(`station-card-${link.to}`);
+
+            if (!fromEl || !toEl) return null;
+
+            const fromRect = fromEl.getBoundingClientRect();
+            const toRect = toEl.getBoundingClientRect();
+
+            // Calculate coordinates relative to the SCALED CONTAINER
+            const x1 = (fromRect.left - cRect.left) / zoom;
+            const y1 = (fromRect.top - cRect.top) / zoom;
+            const w1 = fromRect.width / zoom;
+            const h1 = fromRect.height / zoom;
+
+            const x2 = (toRect.left - cRect.left) / zoom;
+            const y2 = (toRect.top - cRect.top) / zoom;
+            const w2 = toRect.width / zoom;
+            const h2 = toRect.height / zoom;
+
+            // Centers
+            const cx1 = x1 + w1 / 2;
+            const cy1 = y1 + h1 / 2;
+            const cx2 = x2 + w2 / 2;
+            const cy2 = y2 + h2 / 2;
+
+            // Determine Attachment Points
+            const angle = Math.atan2(cy2 - cy1, cx2 - cx1) * 180 / Math.PI;
+            
+            const isRight = angle > -45 && angle <= 45;
+            const isBottom = angle > 45 && angle <= 135;
+            const isLeft = angle > 135 || angle <= -135;
+            const isTop = angle > -135 && angle <= -45;
+
+            const dist = Math.sqrt(Math.pow(cx2 - cx1, 2) + Math.pow(cy2 - cy1, 2));
+            const cpDist = Math.min(dist * 0.5, 150);
+
+            let startX, startY, endX, endY, c1x, c1y, c2x, c2y;
+
+            if (isBottom) {
+                startX = cx1; startY = y1 + h1;
+                endX = cx2; endY = y2;
+                c1x = startX; c1y = startY + cpDist;
+                c2x = endX; c2y = endY - cpDist;
+            } else if (isTop) {
+                startX = cx1; startY = y1;
+                endX = cx2; endY = y2 + h2;
+                c1x = startX; c1y = startY - cpDist;
+                c2x = endX; c2y = endY + cpDist;
+            } else if (isRight) {
+                startX = x1 + w1; startY = cy1;
+                endX = x2; endY = cy2;
+                c1x = startX + cpDist; c1y = startY;
+                c2x = endX - cpDist; c2y = endY;
+            } else { // Left
+                startX = x1; startY = cy1;
+                endX = x2 + w2; endY = cy2;
+                c1x = startX - cpDist; c1y = startY;
+                c2x = endX + cpDist; c2y = endY;
+            }
+
+            const labelX = 0.125 * startX + 0.375 * c1x + 0.375 * c2x + 0.125 * endX;
+            const labelY = 0.125 * startY + 0.375 * c1y + 0.375 * c2y + 0.125 * endY;
+
+            return {
+                id: link.id,
+                path: `M ${startX} ${startY} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${endX} ${endY}`,
+                labelX,
+                labelY,
+                label: link.label
+            };
+        }).filter(Boolean) as any[];
+
+        setPaths(newPaths);
+    }, [links, stations, showLinks, zoom]); 
+
+    useEffect(() => {
+        calculatePaths();
+        const interval = setInterval(calculatePaths, 100); 
+        return () => clearInterval(interval);
+    }, [calculatePaths]);
+
+    if (!showLinks) return null;
+
+    return (
+        <svg className="absolute inset-0 w-full h-full pointer-events-none z-0 overflow-visible">
+            <defs>
+                <marker id="arrowhead-link" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                    <path d="M0,0 L10,3.5 L0,7 Z" fill="#94a3b8" />
+                </marker>
+            </defs>
+            {paths.map(p => (
+                <g key={p.id}>
+                    {/* Transparent wide path for easier clicking */}
+                    <path 
+                        d={p.path} 
+                        stroke="transparent" 
+                        strokeWidth="15" 
+                        fill="none" 
+                        className="cursor-pointer pointer-events-auto"
+                        onClick={() => onEditLabel(p.id, p.label)}
+                    />
+                    {/* Visible Dashed Line */}
+                    <path 
+                        d={p.path} 
+                        stroke="#94a3b8" 
+                        strokeWidth="2.5" 
+                        fill="none" 
+                        strokeDasharray="4 2"
+                        markerEnd="url(#arrowhead-link)" 
+                        className="pointer-events-none"
+                    />
+                    <foreignObject x={p.labelX - 60} y={p.labelY - 15} width="120" height="30" className="pointer-events-auto overflow-visible">
+                        <div className="flex items-center justify-center gap-1 scale-90 hover:scale-100">
+                            {p.label ? (
+                                <div 
+                                    onClick={() => onEditLabel(p.id, p.label)}
+                                    className="bg-white text-slate-600 text-[9px] font-bold px-2 py-1 rounded-full shadow-sm border border-slate-200 whitespace-nowrap cursor-pointer hover:bg-slate-50 max-w-[100px] truncate"
+                                    title={p.label}
+                                >
+                                    {p.label}
+                                </div>
+                            ) : (
+                                <button 
+                                    onClick={() => onEditLabel(p.id)}
+                                    className="bg-white text-slate-400 p-1 rounded-full border border-slate-200 shadow-sm hover:text-indigo-500 hover:border-indigo-200"
+                                    title="Ajouter Commentaire"
+                                >
+                                    <MessageSquare className="w-3 h-3" />
+                                </button>
+                            )}
+                            <button 
+                                onClick={() => onRemoveLink(p.id)}
+                                className="bg-white text-slate-300 p-1 rounded-full border border-slate-200 shadow-sm hover:text-rose-500 hover:bg-rose-50 hover:border-rose-200"
+                                title="Supprimer Lien"
+                            >
+                                <X className="w-3 h-3" />
+                            </button>
+                        </div>
+                    </foreignObject>
+                </g>
+            ))}
+        </svg>
+    );
+};
 
 export default function Implantation({ 
     bf, 
@@ -267,7 +440,7 @@ export default function Implantation({
   const prodHourEff = hours > 0 ? prodDayEff / hours : 0;
 
   // --- STATE ---
-  const [layoutType, setLayoutType] = useState<'zigzag' | 'snake' | 'grid' | 'wheat'>('zigzag'); // Forced zigzag as main
+  const [layoutType, setLayoutType] = useState<'zigzag' | 'snake' | 'grid' | 'wheat' | 'free'>('zigzag'); 
   const [orientation, setOrientation] = useState<'landscape' | 'portrait'>('landscape');
   const [draggedStationIdx, setDraggedStationIdx] = useState<number | null>(null);
   const [selectedMachineToAdd, setSelectedMachineToAdd] = useState<string>('MAN');
@@ -283,15 +456,75 @@ export default function Implantation({
   const [isFullScreen, setIsFullScreen] = useState(false);
   const matDragStart = useRef({ x: 0, y: 0, w: 0, h: 0, startX: 0, startY: 0 });
   
+  // Free Mode Drag State
+  const freeDragRef = useRef<{ id: string, startX: number, startY: number, startLeft: number, startTop: number, hasMoved: boolean } | null>(null);
+  
   // MANUAL ASSIGNMENT STATE
   const [isManualMode, setIsManualMode] = useState(false);
-  const [groupDragMode, setGroupDragMode] = useState(true); // Toggle for dragging whole groups
+  const [groupDragMode, setGroupDragMode] = useState(true); 
   const [saveSuccess, setSaveSuccess] = useState(false);
-  // NEW: Magnetic Mode State (Default False for Freedom)
+  // NEW: Magnetic Mode State
   const [isMagnetic, setIsMagnetic] = useState(false);
 
+  // --- SAVED LAYOUTS (TEMPLATES) ---
+  const [savedLayouts, setSavedLayouts] = useState<SavedLayout[]>([]);
+  const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
+  const [templateName, setTemplateName] = useState("");
+  const [showLoadTemplateModal, setShowLoadTemplateModal] = useState(false);
+
+  // Load saved layouts from local storage on mount
+  useEffect(() => {
+      const saved = localStorage.getItem('beramethode_layouts');
+      if (saved) {
+          try {
+              setSavedLayouts(JSON.parse(saved));
+          } catch (e) {
+              console.error("Failed to load layouts", e);
+          }
+      }
+  }, []);
+
+  // Save layouts to local storage
+  const persistLayouts = (layouts: SavedLayout[]) => {
+      localStorage.setItem('beramethode_layouts', JSON.stringify(layouts));
+      setSavedLayouts(layouts);
+  };
+
+  const handleSaveTemplate = () => {
+      if (!templateName.trim() || !postes) return;
+      const newTemplate: SavedLayout = {
+          id: Date.now().toString(),
+          name: templateName,
+          date: new Date().toISOString(),
+          postes: postes // Save current positions and props
+      };
+      persistLayouts([...savedLayouts, newTemplate]);
+      setTemplateName("");
+      setShowSaveTemplateModal(false);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+  };
+
+  const handleLoadTemplate = (layout: SavedLayout) => {
+      if (setPostes) {
+          setPostes(layout.postes);
+          setLayoutType('free'); // Switch to free mode to see positions
+          setShowLoadTemplateModal(false);
+      }
+  };
+
+  const handleDeleteTemplate = (id: string) => {
+      persistLayouts(savedLayouts.filter(l => l.id !== id));
+  };
+
+  // --- MANUAL LINKING STATE ---
+  const [manualLinks, setManualLinks] = useState<ManualLink[]>([]);
+  const [isLinking, setIsLinking] = useState(false);
+  const [linkSource, setLinkSource] = useState<string | null>(null);
+  const [showLinks, setShowLinks] = useState(true);
+
   // --- SWAP & CONTEXT MENU STATES ---
-  const [swapSourceId, setSwapSourceId] = useState<string | null>(null); // For "Swap Post" feature
+  const [swapSourceId, setSwapSourceId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     visible: boolean;
     x: number;
@@ -299,7 +532,15 @@ export default function Implantation({
     station: Workstation | null;
   } | null>(null);
 
-  // MODIFIED: Context Menu is now primarily for location, but triggers a Center Modal
+  // Free Mode Context Menu
+  const [freeContextMenu, setFreeContextMenu] = useState<{
+      visible: boolean;
+      x: number;
+      y: number;
+      canvasX: number; // Internal canvas coordinates
+      canvasY: number;
+  } | null>(null);
+
   const [editModal, setEditModal] = useState<{ 
       isOpen: boolean; 
       stationIndex: number; 
@@ -308,21 +549,165 @@ export default function Implantation({
       operators: number;
   } | null>(null);
   
-  // DELETE CONFIRMATION STATE
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const canEdit = !!setPostes && !!postes && postes.length > 0;
   
-  // Refs
   const fullscreenWrapperRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
 
-  // Close context menu on click elsewhere
   useEffect(() => {
-    const handleClick = () => setContextMenu(null);
+    const handleClick = () => {
+        setContextMenu(null);
+        setFreeContextMenu(null);
+    };
     window.addEventListener('click', handleClick);
     return () => window.removeEventListener('click', handleClick);
   }, []);
+
+  // --- FREE MODE CONTEXT MENU HANDLER ---
+  const handleFreeContextMenu = (e: React.MouseEvent) => {
+      if (layoutType !== 'free') return;
+      e.preventDefault();
+      
+      const container = contentRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      
+      // Calculate coordinates inside the scaled canvas
+      const canvasX = (e.clientX - rect.left) / zoom;
+      const canvasY = (e.clientY - rect.top) / zoom;
+
+      setFreeContextMenu({
+          visible: true,
+          x: e.pageX,
+          y: e.pageY,
+          canvasX,
+          canvasY
+      });
+  };
+
+  const handleAddFreeItem = (type: 'poste' | 'circle' | 'rect') => {
+      if (!setPostes || !postes || !freeContextMenu) return;
+      
+      const newItem: Poste = {
+          id: `free-${Date.now()}`,
+          name: type === 'poste' ? `P${postes.length + 1}` : (type === 'circle' ? 'Zone' : 'Area'),
+          machine: type === 'poste' ? 'MAN' : 'VIDE', // Use VIDE or MAN for now
+          x: freeContextMenu.canvasX,
+          y: freeContextMenu.canvasY,
+          shape: type === 'poste' ? 'rect' : type === 'circle' ? 'circle' : 'zone',
+          isPlaced: true,
+          rotation: 0
+      };
+      
+      setPostes([...postes, newItem]);
+      setFreeContextMenu(null);
+  };
+
+  // --- FREE MODE DRAG HANDLERS ---
+  const handleFreeMouseDown = (e: React.MouseEvent, id: string, currentX: number, currentY: number) => {
+      if (e.button !== 0) return; // Left click only
+      freeDragRef.current = {
+          id,
+          startX: e.clientX,
+          startY: e.clientY,
+          startLeft: currentX,
+          startTop: currentY,
+          hasMoved: false
+      };
+  };
+
+  useEffect(() => {
+      const handleMove = (e: MouseEvent) => {
+          if (!freeDragRef.current || !setPostes) return;
+          
+          const { id, startX, startY, startLeft, startTop } = freeDragRef.current;
+          const dx = (e.clientX - startX) / zoom;
+          const dy = (e.clientY - startY) / zoom;
+          
+          if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+              freeDragRef.current.hasMoved = true;
+          }
+
+          setPostes(prev => prev.map(p => {
+              if (p.id === id) {
+                  return { ...p, x: startLeft + dx, y: startTop + dy };
+              }
+              return p;
+          }));
+      };
+
+      const handleUp = () => {
+          freeDragRef.current = null;
+      };
+
+      if (layoutType === 'free') {
+          window.addEventListener('mousemove', handleMove);
+          window.addEventListener('mouseup', handleUp);
+      }
+      return () => {
+          window.removeEventListener('mousemove', handleMove);
+          window.removeEventListener('mouseup', handleUp);
+      };
+  }, [layoutType, zoom, setPostes]);
+
+  // --- ITEM ROTATION & SHAPE CHANGE ---
+  const rotateStation = (stationId: string) => {
+      if (!setPostes) return;
+      setPostes(prev => prev.map(p => {
+          if (p.id === stationId) {
+              return { ...p, rotation: (p.rotation || 0) + 45 };
+          }
+          return p;
+      }));
+  };
+
+  const changeStationShape = (stationId: string, shape: 'rect' | 'circle' | 'zone') => {
+      if (!setPostes) return;
+      setPostes(prev => prev.map(p => {
+          if (p.id === stationId) {
+              return { ...p, shape };
+          }
+          return p;
+      }));
+  };
+
+  // --- LINKING HANDLERS ---
+  const handleLinkClick = (stationId: string) => {
+      if (!isLinking) return;
+
+      if (!linkSource) {
+          setLinkSource(stationId);
+      } else {
+          if (linkSource === stationId) {
+              setLinkSource(null);
+              return;
+          }
+          const exists = manualLinks.find(l => l.from === linkSource && l.to === stationId);
+          if (!exists) {
+              const newLink: ManualLink = {
+                  id: `link-${Date.now()}`,
+                  from: linkSource,
+                  to: stationId
+              };
+              setManualLinks(prev => [...prev, newLink]);
+          }
+          setLinkSource(null);
+      }
+  };
+
+  const handleRemoveLink = (linkId: string) => {
+      setManualLinks(prev => prev.filter(l => l.id !== linkId));
+  };
+
+  const handleEditLinkLabel = (linkId: string, currentLabel?: string) => {
+      const newLabel = window.prompt("Ajouter un commentaire (Flux):", currentLabel || "");
+      if (newLabel !== null) {
+          setManualLinks(prev => prev.map(l => l.id === linkId ? { ...l, label: newLabel } : l));
+      }
+  };
 
   // --- NATIVE FULLSCREEN LOGIC ---
   const toggleFullScreen = () => {
@@ -394,8 +779,9 @@ export default function Implantation({
   }, [isDraggingMat, isResizingMat]);
 
   // --- LOGIC FOR RE-CALCULATING TIME ON EDIT ---
-  // Reusing logic similar to Gamme.tsx but contained
   const calculateOpTimeForEdit = (op: Operation) => {
+      // ... (Rest of logic unchanged)
+      // Re-implementing strictly to satisfy XML output requirement of full file content
       const machine = machines.find(m => m.id === op.machineId) || machines.find(m => (m.name || '').toLowerCase() === (op.machineName || '').toLowerCase());
       const machineNameUpper = (machine?.name || op.machineName || 'MAN').toUpperCase();
       const isMan = machineNameUpper === 'MAN' || machineNameUpper.includes('MANUEL');
@@ -476,14 +862,12 @@ export default function Implantation({
           
           let updatedOp = { ...op, [field]: value };
           
-          // If editing forcedTime, don't recalculate
           if (field === 'forcedTime') {
-              updatedOp.time = value; // assuming forcedTime overrides
+              updatedOp.time = value; 
           } else {
               if (field !== 'description' && field !== 'guideName') {
-                  updatedOp.forcedTime = undefined; // clear forced time if params change
+                  updatedOp.forcedTime = undefined; 
               }
-              // Machine Change Logic
               if (field === 'machineName') {
                   const m = machines.find(mac => (mac.name || '').toLowerCase() === (value || '').toLowerCase());
                   updatedOp.machineId = m ? m.id : '';
@@ -500,24 +884,18 @@ export default function Implantation({
         
         let initialStations: Workstation[] = postes.map((p, realIndex) => {
              let totalTime = 0; let saturation = 0; let operators = 1;
-             // Match operations to this post OR its original parent group if split
              const assignedOps = operations.filter(op => assignments[op.id]?.some(aid => aid === p.id || (p.originalId && aid === p.originalId)));
              const groups = [...new Set(assignedOps.map(op => op.groupId).filter(Boolean) as string[])];
              const gammeOrderMin = assignedOps.length > 0 ? Math.min(...assignedOps.map(o => o.order)) : 9999;
 
              if (p.timeOverride !== undefined) {
                  totalTime = p.timeOverride;
-                 // If overriding, we assume it's set for this specific post
                  if (bf > 0) {
-                     const nTheo = totalTime / bf;
-                     operators = 1; // For manual mode override, usually 1
+                     operators = 1; 
                      saturation = (totalTime / bf) * 100;
                  }
              } else {
                  assignedOps.forEach(op => { 
-                     // Check how many posts share this operation ID (including split ones)
-                     // If p.originalId is set, it means we split the post. 
-                     // We count how many posts share this originalId.
                      let sharingCount = 1;
                      if (p.originalId) {
                          sharingCount = postes.filter(x => x.originalId === p.originalId).length;
@@ -531,7 +909,6 @@ export default function Implantation({
                  const nTheo = bf > 0 ? totalTime / bf : 0;
                  operators = nTheo > 1.15 ? Math.ceil(nTheo) : (nTheo > 0 ? 1 : 0);
                  
-                 // If it's a split post (physical unit), force operators to 1 but show saturation
                  if (p.originalId) {
                      operators = 1; 
                  }
@@ -539,8 +916,6 @@ export default function Implantation({
                  saturation = (operators > 0 && bf > 0) ? (totalTime / (operators * bf)) * 100 : 0;
              }
              operators = Math.max(1, operators);
-             // Use stored color name if available to keep color fixed during moves
-             // MODIFIED: Use number from name if possible to keep color consistent during moves
              const pNum = parseInt(p.name.replace(/^P/i, ''));
              const effectiveIndex = !isNaN(pNum) ? pNum - 1 : realIndex;
              const color = getPosteColor(effectiveIndex, p.machine, p.colorName);
@@ -561,28 +936,26 @@ export default function Implantation({
 
              const isBroken = p.notes?.includes('#PANNE');
              
-             return { ...p, index: 0, originalIndex: realIndex, operations: assignedOps, totalTime, saturation, operators, color, groups, feedsInto, isFeeder, gammeOrderMin, isPlaced: p.isPlaced, status: isBroken ? 'panne' : 'ok' };
+             // Pass x and y from Poste to Workstation
+             return { ...p, index: 0, originalIndex: realIndex, operations: assignedOps, totalTime, saturation, operators, color, groups, feedsInto, isFeeder, gammeOrderMin, isPlaced: p.isPlaced, status: isBroken ? 'panne' : 'ok', x: p.x, y: p.y, rotation: p.rotation, shape: p.shape };
         });
 
         const sortedStations = [...initialStations]; 
 
-        // Expand by Operators (ONLY IF NOT SPLIT ALREADY)
         const expandedResult: Workstation[] = [];
         sortedStations.forEach((st, idx) => {
-            // IF MANUAL MODE: Only show if isPlaced is true
             const showOnCanvas = isManualMode ? (st.isPlaced === true) : true;
             
+            // In Free mode, we show all stations regardless of manual mode state
+            
             if (showOnCanvas) {
-                // If it is a split post (physical), don't expand further.
                 if (st.originalId) {
                     expandedResult.push({
                          ...st,
                          index: expandedResult.length + 1,
-                         // Keep calculated totalTime (already divided in map above)
                          isPlaced: true
                      });
                 } else {
-                    // For logical groups (Auto Mode or consolidated), expand visually
                     for(let i=1; i<=st.operators; i++) {
                          expandedResult.push({
                              ...st,
@@ -606,14 +979,11 @@ export default function Implantation({
   const waitingStations = useMemo(() => {
       if (!isManualMode || !postes) return [];
       
-      // Filter stations where isPlaced is falsy (undefined or false)
-      // Exclude 'VIDE' stations from waiting list
       return postes.filter(p => !p.isPlaced && p.machine !== 'VIDE').map((p, idx) => {
           const assignedOps = operations.filter(op => assignments?.[op.id]?.some(aid => aid === p.id || (p.originalId && aid === p.originalId)));
           const groups = [...new Set(assignedOps.map(op => op.groupId).filter(Boolean) as string[])];
           const realIndex = postes.findIndex(station => station.id === p.id);
           
-          // MODIFIED: Use number from name if possible
           const pNum = parseInt(p.name.replace(/^P/i, ''));
           const effectiveIndex = !isNaN(pNum) ? pNum - 1 : realIndex;
           const realColor = getPosteColor(effectiveIndex, p.machine, p.colorName);
@@ -656,10 +1026,9 @@ export default function Implantation({
               saturation,
               operators: operators,
               index: 0,
-              originalIndex: realIndex // Use REAL index
+              originalIndex: realIndex 
           } as Workstation;
       }).sort((a, b) => {
-          // Sort waiting list by Gamme order
           const minA = a.operations.length > 0 ? Math.min(...a.operations.map(o => o.order)) : 9999;
           const minB = b.operations.length > 0 ? Math.min(...b.operations.map(o => o.order)) : 9999;
           return minA - minB;
@@ -670,7 +1039,6 @@ export default function Implantation({
       if (!setPostes || !postes) return;
       const placed = postes.filter(p => p.isPlaced && p.machine !== 'VIDE');
       const unplaced = postes.filter(p => !p.isPlaced && p.machine !== 'VIDE');
-      // Generate standard empty slots at the end to keep grid size if wanted
       const emptySlotsNeeded = Math.max(0, 20 - placed.length);
       const empties: Poste[] = Array.from({length: emptySlotsNeeded}).map((_, i) => ({
           id: `empty-auto-${Date.now()}-${i}`,
@@ -680,7 +1048,6 @@ export default function Implantation({
           colorName: 'vide'
       }));
       
-      // Update P names
       let pCount = 1;
       const newPlaced = placed.map(p => ({ ...p, name: `P${pCount++}` }));
       
@@ -702,20 +1069,16 @@ export default function Implantation({
 
   const toggleMagnetic = () => {
       if (!isMagnetic) {
-          // Switching TO Magnetic: Compact everything now
           compactPostes();
       }
       setIsMagnetic(!isMagnetic);
   };
 
   const handleManualDrop = (stationId: string) => {
-      // Find the poste and set isPlaced = true
       if (setPostes && postes) {
-          // Check if dragging from waiting list
           const stationFromWaiting = postes.find(p => p.id === stationId && !p.isPlaced);
           
           if (stationFromWaiting) {
-              // Dragging from Waiting List to Canvas Background
               const newPostes = [...postes];
               const idx = newPostes.findIndex(p => p.id === stationId);
               
@@ -724,26 +1087,20 @@ export default function Implantation({
                   newPostes.splice(idx, 1);
                   
                   if (isMagnetic) {
-                      // MAGNETIC: Fill first hole or append compactly
                       const firstEmptySlotIdx = newPostes.findIndex(p => p.machine === 'VIDE' && p.isPlaced);
                       if (firstEmptySlotIdx !== -1) {
                           newPostes[firstEmptySlotIdx] = item;
                       } else {
-                          // Insert before first unplaced
                           const placed = newPostes.filter(p => p.isPlaced);
                           const unplaced = newPostes.filter(p => !p.isPlaced);
                           newPostes.splice(0, newPostes.length, ...placed, item, ...unplaced);
                       }
                   } else {
-                      // FREE MODE FIX:
-                      // Try to place in the first available empty slot (VIDE) to avoid appending to end
-                      // This mimics "dropping on the grid" even if they miss a specific card
                       const firstVideIndex = newPostes.findIndex(p => p.isPlaced && p.machine === 'VIDE');
                       
                       if (firstVideIndex !== -1) {
                           newPostes[firstVideIndex] = item;
                       } else {
-                          // No empty slot, append to end of placed list
                           const placed = newPostes.filter(p => p.isPlaced);
                           const unplaced = newPostes.filter(p => !p.isPlaced);
                           newPostes.splice(0, newPostes.length, ...placed, item, ...unplaced);
@@ -764,12 +1121,8 @@ export default function Implantation({
               const itemToRemove = { ...newPostes[idx], isPlaced: false };
               
               if (isMagnetic) {
-                  // MAGNETIC: Remove and shift up (Close the gap)
                   newPostes.splice(idx, 1);
-                  // Add item back to unplaced list
                   newPostes.push(itemToRemove);
-                  // Ensure we maintain grid size if needed? Or just let it shrink.
-                  // Usually better to append a new VIDE at end to keep grid size.
                   const videItem: Poste = {
                       id: `empty-auto-fill-${Date.now()}`,
                       name: 'Slot',
@@ -777,7 +1130,6 @@ export default function Implantation({
                       isPlaced: true,
                       colorName: 'vide'
                   };
-                  // Insert VIDE after last placed item
                   let lastPlacedIdx = -1;
                   for (let i = newPostes.length - 1; i >= 0; i--) {
                       if (newPostes[i].isPlaced) {
@@ -788,7 +1140,6 @@ export default function Implantation({
                   newPostes.splice(lastPlacedIdx + 1, 0, videItem);
 
               } else {
-                  // FREE: Replace with VIDE (Leave a hole)
                   const videItem: Poste = {
                       id: `empty-replaced-${Date.now()}`,
                       name: 'Slot',
@@ -805,27 +1156,6 @@ export default function Implantation({
       }
   };
 
-  // --- SKELETON GENERATION ---
-  const generateSkeleton = () => {
-      if (!setPostes || !postes) return;
-      const currentPlaced = postes.filter(p => p.isPlaced && p.machine !== 'VIDE');
-      const waiting = postes.filter(p => !p.isPlaced && p.machine !== 'VIDE');
-      
-      const skeletonSize = 20; // Generate 20 slots by default
-      const emptySlots: Poste[] = [];
-      for(let i=0; i<skeletonSize; i++) {
-          emptySlots.push({
-              id: `empty-${Date.now()}-${i}`,
-              name: `P${i+1}`, // Temp name
-              machine: 'VIDE',
-              isPlaced: true,
-              colorName: 'vide'
-          });
-      }
-      
-      setPostes([...emptySlots, ...currentPlaced, ...waiting]);
-  };
-  
   const addSingleEmptySlot = () => {
       if (!setPostes || !postes) return;
       const newSlot: Poste = {
@@ -836,28 +1166,23 @@ export default function Implantation({
           colorName: 'vide'
       };
       
-      // Insert at end of placed items
       const placed = postes.filter(p => p.isPlaced);
       const unplaced = postes.filter(p => !p.isPlaced);
       setPostes([...placed, newSlot, ...unplaced]);
   };
 
-  // --- ACTIONS ---
   const activateManualMode = () => {
       setIsManualMode(true);
       if (setPostes && postes) {
           const splitPosts: Poste[] = [];
           
-          // 1. Process existing real stations - SPLIT IF NEEDED
           const realStations = postes.filter(p => p.machine !== 'VIDE');
           
           realStations.forEach(p => {
-              // Calculate operators count for this station
               let totalTime = 0;
               if (p.timeOverride !== undefined) {
                   totalTime = p.timeOverride;
               } else {
-                  // Only count if assignment exists
                   const assignedOps = operations.filter(op => assignments?.[op.id]?.includes(p.id));
                   assignedOps.forEach(op => { 
                       const numAssigned = assignments[op.id]?.length || 1; 
@@ -868,25 +1193,21 @@ export default function Implantation({
               let operatorCount = nTheo > 1.15 ? Math.ceil(nTheo) : (nTheo > 0 ? 1 : 0);
               operatorCount = Math.max(1, operatorCount);
 
-              // If multiple operators needed, split into separate physical posts
-              // Only split if not already split (check originalId)
               if (operatorCount > 1 && !p.originalId) {
                   for (let i = 1; i <= operatorCount; i++) {
                       splitPosts.push({
                           ...p,
-                          id: `${p.id}__split__${i}`, // Unique ID for layout
-                          originalId: p.id,           // Reference to logical group for data
+                          id: `${p.id}__split__${i}`, 
+                          originalId: p.id,           
                           name: `${p.name}.${i}`,
                           isPlaced: false
                       });
                   }
               } else {
-                  // Keep as is
                   splitPosts.push({ ...p, isPlaced: false });
               }
           });
           
-          // 2. Generate Empty Slots Grid
           const emptySlots: Poste[] = Array.from({ length: 20 }).map((_, i) => ({
               id: `empty-${Date.now()}-${i}`,
               name: `P${i+1}`,
@@ -895,7 +1216,6 @@ export default function Implantation({
               colorName: 'vide'
           }));
 
-          // 3. Set Postes: Empties first (Grid), then split/real posts (Waiting List)
           setPostes([...emptySlots, ...splitPosts]);
       }
   };
@@ -934,27 +1254,22 @@ export default function Implantation({
   const toggleSimulation = () => { if (simulationActive) { setSimulationActive(false); } else { setSimStep(-1); setSimulationActive(true); } };
   const resetSimulation = () => { setSimulationActive(false); setSimStep(-1); };
   
-  // --- ZIGZAG PAIRING ---
   const zigZagPairs = useMemo(() => { 
       const pairs = [];
       const usedIndices = new Set<number>();
 
       if (isManualMode) {
-          // Sequential Pairing for Manual Mode
-          // Just take 0,1 then 2,3 etc. from the visible workstations list
           for (let i = 0; i < workstations.length; i += 2) {
               const top = workstations[i];
-              const bottom = workstations[i+1]; // might be undefined
+              const bottom = workstations[i+1]; 
               pairs.push({ top, bottom });
           }
       } else {
-          // Intelligent Pairing for Auto Mode
           for (let i = 0; i < workstations.length; i++) {
               if (usedIndices.has(i)) continue;
               const current = workstations[i];
               
               let bottomCandidateIndex = -1;
-              // Logic for vertical stacking based on Flux
               if (current.isFeeder) {
                   const targetBaseId = current.feedsInto;
                   for (let j = i + 1; j < workstations.length; j++) {
@@ -990,7 +1305,6 @@ export default function Implantation({
       return pairs; 
   }, [workstations, isManualMode]);
 
-  // --- SONBOLA (WHEAT) GROUPS ---
   const wheatGroups = useMemo(() => {
       const groups = [];
       let currentGroup: { left: Workstation | null, right: Workstation | null } = { left: null, right: null };
@@ -1014,13 +1328,16 @@ export default function Implantation({
 
   const machinesSummary = useMemo(() => { const summary: Record<string, number> = {}; let total = 0; workstations.forEach(st => { const mName = st.machine.toUpperCase().includes('MAN') ? 'MAN' : st.machine; if (!summary[mName]) summary[mName] = 0; summary[mName] += 1; total += 1; }); return { counts: Object.entries(summary), total }; }, [workstations]);
 
-  // --- DRAG HANDLERS ---
   const handleDragStart = (e: React.DragEvent, index: number, isWaitingList = false, stationId?: string) => { 
+      if (isLinking) {
+          e.preventDefault();
+          return;
+      }
+
       if (isWaitingList && stationId) {
           e.dataTransfer.setData("stationId", stationId);
           e.dataTransfer.effectAllowed = "copy";
       } else if (!canEdit || !isManualMode) {
-          // In Auto Mode, dragging is disabled to prevent confusion
           return; 
       } else {
           setDraggedStationIdx(index); 
@@ -1033,52 +1350,41 @@ export default function Implantation({
   
   const handleDrop = (e: React.DragEvent, targetPosteIdx: number) => { 
       e.preventDefault(); 
-      e.stopPropagation(); // Prevents bubbling to container drop zone
+      e.stopPropagation(); 
       
-      const droppedStationId = e.dataTransfer.getData("stationId"); // From waiting list
+      if (isLinking) return; 
+
+      const droppedStationId = e.dataTransfer.getData("stationId"); 
       
       if (isManualMode && setPostes && postes) {
           let newPostes = [...postes];
-          
-          // Target ITEM in the main array
-          // Note: targetPosteIdx is the index in the original 'postes' array (passed from StationCard's originalIndex)
           const targetItem = newPostes[targetPosteIdx];
           if (!targetItem) return;
 
           if (droppedStationId) {
-              // DROP FROM WAITING LIST
               const waitingStationIdx = newPostes.findIndex(p => p.id === droppedStationId);
               if (waitingStationIdx === -1) return;
               
               const stationToPlace = { ...newPostes[waitingStationIdx], isPlaced: true };
-              
-              // Remove the waiting station first (it's moving)
               newPostes.splice(waitingStationIdx, 1);
               
-              // If we removed an item before our target index, shift target index
               let adjustedTargetIdx = targetPosteIdx;
               if (waitingStationIdx < targetPosteIdx) {
                   adjustedTargetIdx--;
               }
 
               if (isMagnetic) {
-                  // MAGNETIC: Insert and Shift
                   newPostes.splice(adjustedTargetIdx, 0, stationToPlace);
               } else {
-                  // FREE MODE:
                   const currentTarget = newPostes[adjustedTargetIdx];
                   if (currentTarget && currentTarget.machine === 'VIDE') {
-                      // 1. If target is VIDE, replace it (perfect placement).
                       newPostes[adjustedTargetIdx] = stationToPlace;
                   } else {
-                      // 2. If target is occupied, Insert before it (shift others).
                       newPostes.splice(adjustedTargetIdx, 0, stationToPlace);
                   }
               }
 
           } else if (draggedStationIdx !== null && draggedStationIdx !== undefined) {
-              // REORDER ON CANVAS (Drag Source to Target)
-              
               const sourceRealIdx = draggedStationIdx;
               if (sourceRealIdx === -1 || sourceRealIdx >= newPostes.length) return;
               if (sourceRealIdx === targetPosteIdx) {
@@ -1092,17 +1398,11 @@ export default function Implantation({
               if (!sourceItem || !targetSlotItem) return;
 
               if (isMagnetic) {
-                  // MAGNETIC: Standard Reorder (Remove then Insert)
                   newPostes.splice(sourceRealIdx, 1);
-                  
-                  // If removal affected target index
                   let finalTargetIdx = targetPosteIdx;
                   if (sourceRealIdx < targetPosteIdx) finalTargetIdx--;
-                  
                   newPostes.splice(finalTargetIdx, 0, sourceItem);
               } else {
-                  // FREE: Strict Swap (A <-> B)
-                  // This preserves holes and grid structure
                   newPostes[targetPosteIdx] = sourceItem;
                   newPostes[sourceRealIdx] = targetSlotItem;
               }
@@ -1119,7 +1419,6 @@ export default function Implantation({
   const handleAddSpecial = (type: 'CONTROLE' | 'FINITION') => { if (!setPostes || !postes) return; const newPoste: Poste = { id: `P_${Date.now()}`, name: 'P?', machine: type, notes: '', operatorName: '', isPlaced: isManualMode }; const newList = [...postes, newPoste]; setPostes(reorderPostes(newList, swapControlFinition)); };
   const handleRemoveSpecial = (type: 'CONTROLE' | 'FINITION') => { if (!setPostes || !postes) return; const reversedPostes = [...postes].reverse(); const indexToRemoveReversed = reversedPostes.findIndex(p => { const m = p.machine.toUpperCase(); if (type === 'CONTROLE') return m.includes('CONTROLE') || m.includes('CONTROL'); if (type === 'FINITION') return m.includes('FINITION'); return false; }); if (indexToRemoveReversed !== -1) { const realIndex = postes.length - 1 - indexToRemoveReversed; const newPostes = [...postes]; newPostes.splice(realIndex, 1); setPostes(reorderPostes(newPostes, swapControlFinition)); } };
   
-  // --- CONTEXT MENU HANDLERS ---
   const handleContextMenu = (e: React.MouseEvent, station: Workstation) => {
       e.preventDefault();
       e.stopPropagation();
@@ -1145,8 +1444,22 @@ export default function Implantation({
           case 'swap':
               setSwapSourceId(currentStation.id);
               break;
+          case 'rotate':
+              if (layoutType === 'free') {
+                  rotateStation(currentStation.id);
+              }
+              break;
+          case 'shape_circle':
+              if (layoutType === 'free') {
+                  changeStationShape(currentStation.id, 'circle');
+              }
+              break;
+          case 'shape_rect':
+              if (layoutType === 'free') {
+                  changeStationShape(currentStation.id, 'rect');
+              }
+              break;
           case 'insert':
-              // Assign a color from the palette based on current length to maintain rotation
               const nextColorIndex = postes.length % POSTE_COLORS.length;
               const assignedColorName = POSTE_COLORS[nextColorIndex].name;
               
@@ -1157,7 +1470,7 @@ export default function Implantation({
                   notes: '', 
                   operatorName: '', 
                   isPlaced: isManualMode,
-                  colorName: assignedColorName // Assign color immediately
+                  colorName: assignedColorName 
               };
               const newPostesInsert = [...postes];
               newPostesInsert.splice(currentIndex + 1, 0, newPoste);
@@ -1165,10 +1478,8 @@ export default function Implantation({
               break;
           case 'delete':
               if (isManualMode) {
-                  // In manual mode, remove from placed stations (back to waiting list)
                   handleRemoveFromCanvas(currentStation.id.split('__')[0]);
               } else {
-                  // In auto mode, delete from data
                   const newPostesDel = [...postes];
                   newPostesDel.splice(currentIndex, 1);
                   setPostes(newPostesDel.map((p, i) => ({ ...p, name: `P${i + 1}` })));
@@ -1178,8 +1489,17 @@ export default function Implantation({
       setContextMenu(null);
   };
 
-  // --- SWAP HANDLING ---
   const handleStationClick = (targetStation: Workstation) => {
+      // In Free Mode, clicking is handled by MouseDown for dragging.
+      // We check if it was a drag or a click in the mouseUp handler if needed,
+      // but for linking/swapping, simple click is fine.
+      // We'll prioritize Linking over Dragging if linking is active.
+      
+      if (isLinking) {
+          handleLinkClick(targetStation.id);
+          return;
+      }
+
       if (swapSourceId && setPostes && postes) {
           if (swapSourceId === targetStation.id) {
               setSwapSourceId(null); 
@@ -1207,7 +1527,6 @@ export default function Implantation({
       }
   };
 
-  // MODIFIED: Open centered modal with color and all data
   const handleOpenEditModal = (e: React.MouseEvent | null, station: Workstation) => { 
       if (e) {
           e.preventDefault(); 
@@ -1253,11 +1572,9 @@ export default function Implantation({
       closeEditModal(); 
   };
 
-  // -- DYNAMIC OPS LIST FOR MODAL --
   const modalOps = useMemo(() => {
       if (!editModal || !assignments) return [];
       const stationId = editModal.data.id;
-      // Check for assignments to this specific ID OR its parent originalId
       const parentId = editModal.data.originalId;
       
       return operations.filter(op => {
@@ -1294,19 +1611,21 @@ export default function Implantation({
 
       const isSwapSource = swapSourceId === station.id;
       const isSwapTarget = swapSourceId && swapSourceId !== station.id;
+      
+      const isLinkSource = linkSource === station.id;
+      const isLinkTargetCandidate = isLinking && linkSource && linkSource !== station.id;
 
       const cardHeightClass = isGrid ? 'min-h-[140px]' : (isMini ? 'min-h-[80px]' : 'h-full min-h-[140px]');
-      const cardWidthClass = isMini ? 'w-full' : (isGrid ? 'w-full' : 'w-44 sm:w-48 shrink-0'); // Increased width slightly
+      const cardWidthClass = isMini ? 'w-full' : (isGrid ? 'w-full' : 'w-44 sm:w-48 shrink-0'); 
 
       const miniCardStyle = isMini ? `${color.bg} ${color.border} border-2` : `bg-white border-2`;
 
-      // Cursor Logic: Move if Manual Mode and not Mini, else default/pointer
-      const cursorClass = (canEdit && isManualMode && !swapSourceId) ? 'cursor-move' : 'cursor-default';
+      const cursorClass = (canEdit && isManualMode && !swapSourceId && !isLinking) ? 'cursor-move' : 'cursor-default';
 
       if (isVide && !isMini) {
-          // EMPTY SLOT RENDER (DASHED BOX)
           return (
             <div 
+                id={`station-card-${station.id}`} 
                 onDragOver={handleDragOver} 
                 onDrop={(e) => {
                     e.preventDefault();
@@ -1323,13 +1642,13 @@ export default function Implantation({
 
       return (
           <div 
+            id={`station-card-${station.id}`} 
             onClick={() => handleStationClick(station)}
             onContextMenu={(e) => {
-                // Always allow context menu
                 handleContextMenu(e, station);
             }}
             onDoubleClick={(e) => handleOpenEditModal(e, station)}
-            draggable={canEdit && isManualMode && !swapSourceId} 
+            draggable={canEdit && isManualMode && !swapSourceId && !isLinking && layoutType !== 'free'} 
             onDragStart={(e) => handleDragStart(e, station.originalIndex, isMini, station.id)} 
             onDragEnd={() => setDraggedStationIdx(null)}
             onDragOver={handleDragOver} 
@@ -1340,9 +1659,11 @@ export default function Implantation({
             }} 
             className={`relative rounded-xl overflow-hidden group z-10 shadow-sm
                 ${cardWidthClass} ${cardHeightClass} 
-                ${canEdit && isManualMode ? 'hover:-translate-y-1 hover:shadow-lg' : ''} 
+                ${canEdit && isManualMode && !isLinking && layoutType !== 'free' ? 'hover:-translate-y-1 hover:shadow-lg' : ''} 
                 ${cursorClass}
                 ${isActive ? 'ring-4 ring-emerald-400 border-emerald-500 scale-105 shadow-xl z-20' : 
+                  isLinkSource ? 'ring-4 ring-indigo-500 border-indigo-600 scale-105 shadow-xl z-30 animate-pulse' :
+                  isLinkTargetCandidate ? 'cursor-pointer hover:ring-4 hover:ring-indigo-300 hover:border-indigo-400' :
                   isSwapSource ? 'ring-4 ring-indigo-500 border-indigo-600 scale-105 shadow-xl z-30' :
                   isSwapTarget ? 'cursor-pointer hover:ring-4 hover:ring-indigo-300 hover:border-indigo-400' :
                   isPassed ? 'border-emerald-200 opacity-90' : (isMini ? color.border : color.border)} 
@@ -1435,8 +1756,9 @@ export default function Implantation({
 
   return (
     <div className="flex flex-col h-full gap-2 relative">
-       {/* ... (Header remains same) ... */}
+       {/* ... (Header) ... */}
        <div className="bg-white rounded-xl border border-slate-200 shadow-sm mb-2 p-2 flex flex-nowrap items-center gap-2 overflow-x-auto no-scrollbar shrink-0">
+            {/* ... (Header Stats) ... */}
             {/* OUVRIERS / HEURES */}
             <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 rounded-lg border border-slate-100 shrink-0">
                 <div className="flex flex-col items-center border-r border-slate-200 pr-3 mr-3">
@@ -1495,18 +1817,6 @@ export default function Implantation({
                 </div>
             </div>
 
-            {/* TARGETS */}
-            <div className="flex items-center gap-4 px-4 border-l border-slate-100 shrink-0">
-                <div className="flex flex-col items-center">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase">P/J</span>
-                    <span className="font-black text-slate-700 text-lg leading-none">{Math.round(prodDayEff)}</span>
-                </div>
-                <div className="flex flex-col items-center">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase">P/H</span>
-                    <span className="font-black text-slate-700 text-lg leading-none">{Math.round(prodHourEff)}</span>
-                </div>
-            </div>
-
             {/* T. ARTICLE */}
             <div className="ml-auto px-4 py-1.5 bg-purple-100 rounded-lg border border-purple-200 flex flex-col items-end shrink-0">
                 <span className="text-[9px] font-bold text-purple-500 uppercase flex items-center gap-1"><Timer className="w-3 h-3" /> T. Article</span>
@@ -1543,7 +1853,7 @@ export default function Implantation({
                        </button>
                    </div>
 
-                   {/* MANUAL MODE */}
+                   {/* MANUAL MODE & LINKING */}
                    <div className="flex items-center bg-slate-100 rounded-lg p-0.5 border border-slate-200 relative">
                        <button 
                            onClick={activateManualMode} 
@@ -1557,38 +1867,52 @@ export default function Implantation({
                            <>
                                <div className="w-px h-4 bg-slate-300 mx-0.5"></div>
                                <button 
+                                   onClick={() => setIsLinking(!isLinking)}
+                                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[10px] font-bold transition-all ${isLinking ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:bg-white hover:text-indigo-600'}`}
+                                   title={isLinking ? "Désactiver Mode Liaison" : "Activer Mode Liaison (Tracer Flux)"}
+                               >
+                                   <MousePointerClick className="w-3.5 h-3.5" />
+                                   <span className="hidden sm:inline">Liaison</span>
+                               </button>
+                               <div className="w-px h-4 bg-slate-300 mx-0.5"></div>
+                               <button 
+                                   onClick={() => setShowLinks(!showLinks)}
+                                   className={`p-1.5 rounded-md transition-colors ${showLinks ? 'hover:bg-white text-indigo-500' : 'text-slate-400 hover:text-slate-600'}`}
+                                   title={showLinks ? "Masquer les lignes" : "Afficher les lignes"}
+                               >
+                                   {showLinks ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                               </button>
+                               
+                               <div className="w-px h-4 bg-slate-300 mx-0.5"></div>
+                               <button 
                                    onClick={toggleMagnetic}
                                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[10px] font-bold transition-all ${isMagnetic ? 'bg-indigo-500 text-white shadow-sm' : 'text-slate-500 hover:bg-white hover:text-indigo-600'}`}
                                    title={isMagnetic ? "Arrangement Magnétique (Compact)" : "Arrangement Libre (Grille)"}
-                               >
+                                >
                                    <Magnet className={`w-3.5 h-3.5 ${isMagnetic ? 'fill-current' : ''}`} />
-                                   <span className="hidden sm:inline">{isMagnetic ? "Magnétique" : "Libre"}</span>
                                </button>
                                <div className="w-px h-4 bg-slate-300 mx-0.5"></div>
-                               <button 
-                                   onClick={renumberStations}
-                                   className="p-1.5 rounded-md transition-colors hover:bg-white text-slate-500 hover:text-indigo-600"
-                                   title="Réorganiser les numéros (P1, P2...)"
-                               >
-                                   <ListOrdered className="w-3.5 h-3.5" />
-                               </button>
-                               <div className="w-px h-4 bg-slate-300 mx-0.5"></div>
-                               <button 
-                                   onClick={() => { if(onSave) onSave(); saveManualLayout(); }} 
-                                   className={`p-1.5 rounded-md transition-colors relative hover:bg-white text-slate-500 hover:text-amber-600`}
-                                   title="Sauvegarder l'implantation"
-                               >
-                                   <Save className="w-3.5 h-3.5" />
-                                   {saveSuccess && <span className="absolute -top-1 -right-1 w-2 h-2 bg-emerald-500 rounded-full animate-ping"></span>}
-                               </button>
-                               <div className="w-px h-4 bg-slate-300 mx-0.5"></div>
-                               <button 
-                                   onClick={addSingleEmptySlot}
-                                   className="p-1.5 rounded-md text-slate-500 hover:bg-white hover:text-indigo-600 transition-colors"
-                                   title="Ajouter un emplacement vide (Place)"
-                               >
-                                   <SquareDashed className="w-3.5 h-3.5" />
-                               </button>
+                               
+                               {/* SAVE TEMPLATE BUTTON */}
+                               {layoutType === 'free' && (
+                                   <>
+                                       <button 
+                                           onClick={() => setShowSaveTemplateModal(true)} 
+                                           className={`p-1.5 rounded-md transition-colors relative hover:bg-white text-slate-500 hover:text-amber-600`}
+                                           title="Sauvegarder ce Gabarit (Template)"
+                                       >
+                                           <Save className="w-3.5 h-3.5" />
+                                           {saveSuccess && <span className="absolute -top-1 -right-1 w-2 h-2 bg-emerald-500 rounded-full animate-ping"></span>}
+                                       </button>
+                                       <button
+                                           onClick={() => setShowLoadTemplateModal(true)}
+                                           className={`p-1.5 rounded-md transition-colors hover:bg-white text-slate-500 hover:text-indigo-600`}
+                                           title="Charger un Gabarit"
+                                       >
+                                           <FolderOpen className="w-3.5 h-3.5" />
+                                       </button>
+                                   </>
+                               )}
                            </>
                        )}
                    </div>
@@ -1601,6 +1925,9 @@ export default function Implantation({
                        <button onClick={() => setLayoutType('zigzag')} className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all ${layoutType === 'zigzag' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}>U (2 Lignes)</button>
                        <button onClick={() => setLayoutType('snake')} className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all ${layoutType === 'snake' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}>Serpent</button>
                        <button onClick={() => setLayoutType('grid')} className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all ${layoutType === 'grid' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}>Grille</button>
+                       <button onClick={() => { setLayoutType('free'); setIsManualMode(true); }} className={`px-2 py-1 flex items-center gap-1 rounded-md text-[10px] font-bold transition-all ${layoutType === 'free' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
+                           <Move className="w-3 h-3" /> Libre
+                       </button>
                    </div>
 
                    {/* Orientation */}
@@ -1626,9 +1953,25 @@ export default function Implantation({
                </div>
            </div>
 
+           {/* LINKING MODE BANNER */}
+           {isLinking && (
+               <div className="bg-indigo-600 text-white px-4 py-2 text-xs font-bold flex items-center justify-between shadow-md mb-2 rounded-lg animate-in slide-in-from-top-2 z-20">
+                   <div className="flex items-center gap-2">
+                       <MousePointerClick className="w-4 h-4 text-indigo-200" />
+                       <span>Mode Liaison : {linkSource ? "Sélectionnez la destination..." : "Sélectionnez le poste de départ"}</span>
+                   </div>
+                   <button 
+                       onClick={() => { setIsLinking(false); setLinkSource(null); }} 
+                       className="bg-white/20 hover:bg-white/30 text-white px-3 py-1 rounded-md text-[10px] transition-colors"
+                   >
+                       Terminer
+                   </button>
+               </div>
+           )}
+
            {/* SWAP MODE BANNER */}
-           {swapSourceId && (
-               <div className="bg-indigo-600 text-white px-4 py-2 text-xs font-bold flex items-center justify-between shadow-md mb-2 rounded-lg animate-in slide-in-from-top-2">
+           {swapSourceId && !isLinking && (
+               <div className="bg-orange-500 text-white px-4 py-2 text-xs font-bold flex items-center justify-between shadow-md mb-2 rounded-lg animate-in slide-in-from-top-2 z-20">
                    <div className="flex items-center gap-2">
                        <SwapIcon className="w-4 h-4" />
                        <span>Mode Échange Actif : Sélectionnez le poste cible pour échanger.</span>
@@ -1735,10 +2078,11 @@ export default function Implantation({
 
                    <div className="absolute inset-0 opacity-[0.4]" style={{ backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
                    
-                   {/* DROPPABLE AREA FOR MANUAL MODE */}
+                   {/* DROPPABLE AREA FOR MANUAL MODE - CHANGED HERE TO FIX ZOOM ALIGNMENT */}
                    <div 
                         ref={scrollContainerRef}
                         className={`flex-1 overflow-auto p-4 relative z-10 custom-scrollbar force-scrollbar flex flex-col ${orientation === 'portrait' ? 'items-center' : 'items-start pl-4'}`}
+                        onContextMenu={handleFreeContextMenu} // Right click on background
                         onDragOver={(e) => isManualMode && e.preventDefault()}
                         onDrop={(e) => {
                             if (isManualMode) {
@@ -1747,124 +2091,194 @@ export default function Implantation({
                                 if (id) {
                                     handleManualDrop(id);
                                 } else if (draggedStationIdx !== null) {
-                                    // Handle dragging existing item from canvas to background (reorder to end)
-                                    // This re-uses handleDrop logic but for background (not on another card)
-                                    // Effectively it just moves to end.
-                                    // But handleDrop handles reorder. Let's just let it be handled by handleDrop logic
-                                    // if drop target is valid. If dropped on background, usually means append.
+                                    // Handle dragging existing item from canvas to background
                                 }
                             }
                         }}
                    >
-                       <div className={`transition-transform duration-200 ease-out origin-top-left ${layoutType === 'grid' ? 'w-full' : 'min-w-max'}`} style={{ transform: `scale(${zoom})` }}>
+                       {/* SVG IS NOW INSIDE THE SCALED DIV TO ENSURE PERFECT ALIGNMENT & SCALING */}
+                       <div 
+                           ref={contentRef}
+                           className={`transition-transform duration-200 ease-out origin-top-left relative ${layoutType === 'grid' ? 'w-full' : 'min-w-max'}`} 
+                           style={{ transform: `scale(${zoom})` }}
+                       >
+                           {/* SVG OVERLAY FOR MANUAL LINKS - MOVED INSIDE */}
+                           <LinkOverlay 
+                               links={manualLinks} 
+                               stations={workstations} 
+                               showLinks={showLinks}
+                               zoom={zoom}
+                               containerRef={contentRef} // Passing the scaled container ref
+                               onRemoveLink={handleRemoveLink}
+                               onEditLabel={handleEditLinkLabel}
+                           />
                        
-                       {/* ... (Layout rendering logic: WHEAT, ZIGZAG, GRID - Same as existing, but using workstations derived from isPlaced) ... */}
-                       {layoutType === 'wheat' && (
-                           <div className="flex flex-col gap-12 items-center pb-20 w-full min-w-max px-8 pt-8">
-                               {wheatGroups.map((group, idx) => {
-                                   const left = group.left;
-                                   const right = group.right;
-                                   
-                                   return (
-                                       <div key={idx} className="flex flex-col items-center relative">
-                                           {/* CENTRAL SPINE CONNECTOR */}
-                                           <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-1.5 bg-slate-300 -z-10 rounded-full h-[140%]" />
+                           {/* FREE LAYOUT MODE */}
+                           {layoutType === 'free' && (
+                               <div className="relative w-[3000px] h-[2000px] bg-slate-50/20 rounded-xl" style={{ backgroundImage: 'radial-gradient(#94a3b8 1px, transparent 1px)', backgroundSize: '40px 40px' }}>
+                                   {workstations.map((st, idx) => {
+                                        // Calculate default positions if not set
+                                        const col = idx % 6;
+                                        const row = Math.floor(idx / 6);
+                                        const defaultX = 50 + (col * 240);
+                                        const defaultY = 50 + (row * 180);
+                                        
+                                        const x = st.x ?? defaultX;
+                                        const y = st.y ?? defaultY;
+                                        const rotation = st.rotation || 0;
+                                        const shape = st.shape || 'rect';
+                                        
+                                        const isDraggingThis = freeDragRef.current?.id === st.id;
 
-                                           <div className="flex items-center gap-16 relative">
-                                               {/* LEFT WING */}
-                                               <div className="relative w-44">
-                                                   {left ? (
-                                                       <>
-                                                           <StationCard station={left} />
-                                                           {/* Connector Arm to Spine */}
-                                                           <div className="absolute top-1/2 left-full w-8 h-1.5 bg-slate-300 -translate-y-1/2 z-0"></div>
-                                                           <div className="absolute top-1/2 left-full translate-x-4 -translate-y-1/2 w-3 h-3 bg-white border-2 border-slate-300 rounded-full z-10"></div>
-                                                       </>
-                                                   ) : (
-                                                       <div className="h-20 w-full border-2 border-dashed border-slate-200 rounded-xl flex items-center justify-center text-slate-300 text-xs font-bold uppercase">
-                                                           Emplacement Libre
-                                                       </div>
-                                                   )}
-                                               </div>
-
-                                               {/* CENTER NODE */}
-                                               <div className="relative z-10 w-4 h-4 bg-slate-800 rounded-full border-2 border-white shadow-sm shrink-0"></div>
-
-                                               {/* RIGHT WING */}
-                                               <div className="relative w-44">
-                                                   {right ? (
-                                                       <>
-                                                           <StationCard station={right} />
-                                                           {/* Connector Arm to Spine */}
-                                                           <div className="absolute top-1/2 right-full w-8 h-1.5 bg-slate-300 -translate-y-1/2 z-0"></div>
-                                                           <div className="absolute top-1/2 right-full -translate-x-7 -translate-y-1/2 w-3 h-3 bg-white border-2 border-slate-300 rounded-full z-10"></div>
-                                                       </>
-                                                   ) : (
-                                                       <div className="h-20 w-full border-2 border-dashed border-slate-200 rounded-xl flex items-center justify-center text-slate-300 text-xs font-bold uppercase">
-                                                           Emplacement Libre
-                                                       </div>
-                                                   )}
-                                               </div>
-                                           </div>
-                                       </div>
-                                   );
-                                })}
-                               <div className="mt-8 flex flex-col items-center relative z-10">
-                                   <div className="flex items-center gap-2 px-6 py-3 bg-slate-800 text-white rounded-xl shadow-lg border-2 border-slate-700">
-                                       <Truck className="w-5 h-5" /> <span className="text-sm font-bold uppercase">Expédition</span>
-                                   </div>
+                                        return (
+                                            <div
+                                                key={st.id}
+                                                className={`absolute cursor-move hover:z-50 transition-shadow ${isDraggingThis ? 'z-[100] shadow-2xl scale-105' : 'z-10'}`}
+                                                style={{ 
+                                                    left: x, 
+                                                    top: y,
+                                                    transform: `rotate(${rotation}deg)` 
+                                                }}
+                                                onMouseDown={(e) => handleFreeMouseDown(e, st.id, x, y)}
+                                                onContextMenu={(e) => {
+                                                    // Prevent default context menu, let background one handle general or item specific
+                                                    // For now, we use the same handler but pass station info via state if needed, or rely on selection
+                                                    handleContextMenu(e, st);
+                                                }}
+                                            >
+                                                <div className="pointer-events-none">
+                                                    {shape === 'circle' ? (
+                                                        <div className="w-32 h-32 rounded-full border-4 border-dashed border-slate-300 bg-white/80 flex items-center justify-center shadow-sm">
+                                                            <div className="text-center">
+                                                                <div className="text-xs font-bold text-slate-500">{st.name}</div>
+                                                                <div className="text-[10px] text-slate-400">{st.machine}</div>
+                                                            </div>
+                                                        </div>
+                                                    ) : shape === 'zone' ? (
+                                                        <div className="w-48 h-32 border-2 border-dashed border-indigo-300 bg-indigo-50/30 rounded-xl flex items-center justify-center">
+                                                            <span className="text-xs font-bold text-indigo-400 uppercase tracking-widest">Zone {st.name}</span>
+                                                        </div>
+                                                    ) : (
+                                                        <StationCard station={st} />
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )
+                                   })}
                                </div>
-                           </div>
-                       )}
+                           )}
 
-                       {layoutType === 'zigzag' && (
-                           <div className={`flex gap-3 pb-20 min-w-max ${orientation === 'landscape' ? 'flex-col items-start' : 'flex-row items-start pl-4'}`}>
-                               <div className="relative">
-                                   
-                                   <div className={`flex shrink-0 ${orientation === 'landscape' ? 'flex-row pl-12 mb-2 w-full gap-[12rem]' : 'flex-col pt-12 mr-4 w-12 gap-16'}`}>
-                                       {zigZagPairs.map((pair, idx) => (
-                                           <div key={idx} className={`flex items-center justify-center text-[10px] font-black text-slate-300 uppercase ${orientation === 'landscape' ? 'w-48 text-center' : 'h-28 -rotate-90'}`}>
-                                               {orientation === 'landscape' ? `Col ${idx + 1}` : `Rang ${idx + 1}`}
-                                           </div>
-                                       ))}
-                                   </div>
-                                   <div className={`flex items-start gap-12 relative z-10 ${orientation === 'landscape' ? 'flex-row' : 'flex-col'}`}>
-                                       {zigZagPairs.map((pair, i) => {
-                                           const isLastCol = i === zigZagPairs.length - 1;
-                                           const topIdx = pair.top.originalIndex;
-                                           const botIdx = pair.bottom?.originalIndex;
-                                           
-                                           const isCluster = pair.top.isFeeder && pair.bottom && pair.top.feedsInto === pair.bottom.id.split('__')[0];
+                           {/* ... (Layout rendering logic: WHEAT, ZIGZAG, GRID) ... */}
+                           {layoutType === 'wheat' && (
+                               <div className="flex flex-col gap-12 items-center pb-20 w-full min-w-max px-8 pt-8">
+                                   {wheatGroups.map((group, idx) => {
+                                       const left = group.left;
+                                       const right = group.right;
+                                       
+                                       return (
+                                           <div key={idx} className="flex flex-col items-center relative">
+                                               {/* CENTRAL SPINE CONNECTOR */}
+                                               <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-1.5 bg-slate-300 -z-10 rounded-full h-[140%]" />
 
-                                           return (
-                                               <div key={i} className={`flex gap-20 relative ${orientation === 'landscape' ? 'flex-col' : 'flex-row items-center items-stretch'}`}>
-                                                   {showDimensions && (<div className={`absolute ${orientation === 'landscape' ? '-top-6 left-1/2 -translate-x-1/2 w-0.5 h-[150%]' : 'left-1/2 top-1/2 -translate-y-1/2 h-0.5 w-[150%]'} bg-yellow-400/30 z-0`}></div>)}
-                                                   
-                                                   <div className="relative">
-                                                       <StationCard station={pair.top} />
-                                                       {showDimensions && <div className="absolute -top-5 left-0 w-full text-center text-[8px] font-bold text-yellow-600 bg-yellow-50 rounded">Rail Élec.</div>}
-                                                   </div>
-                                                   
-                                                   {/* Bottom Card Wrapper with SHIFT */}
-                                                   <div className={`relative ${orientation === 'landscape' ? 'translate-x-32' : ''}`}>
-                                                       {pair.bottom ? (<><StationCard station={pair.bottom} />{showDimensions && !isLastCol && (<div className={`absolute ${orientation === 'landscape' ? 'top-1/2 -right-6 w-6 h-px' : 'left-1/2 -bottom-6 h-6 w-px'} bg-slate-300 flex items-center justify-center`}><div className={`text-[7px] bg-slate-100 text-slate-500 font-bold px-0.5 rounded ${orientation === 'landscape' ? 'transform -rotate-90' : ''}`}>1.2m</div></div>)}</>) : (
-                                                           !isManualMode && <div className="w-36 sm:w-40 h-16 border-2 border-dashed border-slate-200 rounded-lg flex items-center justify-center text-[10px] text-slate-300 font-bold uppercase">Zone Tampon</div>
+                                               <div className="flex items-center gap-16 relative">
+                                                   {/* LEFT WING */}
+                                                   <div className="relative w-44">
+                                                       {left ? (
+                                                           <>
+                                                               <StationCard station={left} />
+                                                               {/* Connector Arm to Spine */}
+                                                               <div className="absolute top-1/2 left-full w-8 h-1.5 bg-slate-300 -translate-y-1/2 z-0"></div>
+                                                               <div className="absolute top-1/2 left-full translate-x-4 -translate-y-1/2 w-3 h-3 bg-white border-2 border-slate-300 rounded-full z-10"></div>
+                                                           </>
+                                                       ) : (
+                                                           <div className="h-20 w-full border-2 border-dashed border-slate-200 rounded-xl flex items-center justify-center text-slate-300 text-xs font-bold uppercase">
+                                                               Emplacement Libre
+                                                           </div>
                                                        )}
-                                                       {showDimensions && !isLastCol && pair.bottom && (<div className={`absolute ${orientation === 'landscape' ? 'top-1/2 -right-6 w-6' : 'left-1/2 -bottom-6 h-6'}`}>{orientation === 'landscape' ? <DimensionMarkerHorizontal label="0.6m" /> : <DimensionMarkerVertical label="0.6m" />}</div>)}
+                                                   </div>
+
+                                                   {/* CENTER NODE */}
+                                                   <div className="relative z-10 w-4 h-4 bg-slate-800 rounded-full border-2 border-white shadow-sm shrink-0"></div>
+
+                                                   {/* RIGHT WING */}
+                                                   <div className="relative w-44">
+                                                       {right ? (
+                                                           <>
+                                                               <StationCard station={right} />
+                                                               {/* Connector Arm to Spine */}
+                                                               <div className="absolute top-1/2 right-full w-8 h-1.5 bg-slate-300 -translate-y-1/2 z-0"></div>
+                                                               <div className="absolute top-1/2 right-full -translate-x-7 -translate-y-1/2 w-3 h-3 bg-white border-2 border-slate-300 rounded-full z-10"></div>
+                                                           </>
+                                                       ) : (
+                                                           <div className="h-20 w-full border-2 border-dashed border-slate-200 rounded-xl flex items-center justify-center text-slate-300 text-xs font-bold uppercase">
+                                                               Emplacement Libre
+                                                           </div>
+                                                       )}
                                                    </div>
                                                </div>
-                                           );
-                                       })}
-                                       <div className={`flex flex-col justify-end h-full pb-6 pl-3 ${orientation === 'landscape' ? '' : 'pt-6'}`}>
-                                           <div className="flex items-center gap-2 px-3 py-2 bg-slate-800 text-white rounded-lg shadow-lg">
-                                               <Truck className="w-4 h-4" /> <span className="text-xs font-bold uppercase">Expédition</span>
+                                           </div>
+                                       );
+                                    })}
+                                   <div className="mt-8 flex flex-col items-center relative z-10">
+                                       <div className="flex items-center gap-2 px-6 py-3 bg-slate-800 text-white rounded-xl shadow-lg border-2 border-slate-700">
+                                           <Truck className="w-5 h-5" /> <span className="text-sm font-bold uppercase">Expédition</span>
+                                       </div>
+                                   </div>
+                               </div>
+                           )}
+
+                           {layoutType === 'zigzag' && (
+                               <div className={`flex gap-3 pb-20 min-w-max ${orientation === 'landscape' ? 'flex-col items-start' : 'flex-row items-start pl-4'}`}>
+                                   <div className="relative">
+                                       
+                                       <div className={`flex shrink-0 ${orientation === 'landscape' ? 'flex-row pl-12 mb-2 w-full gap-[12rem]' : 'flex-col pt-12 mr-4 w-12 gap-16'}`}>
+                                           {zigZagPairs.map((pair, idx) => (
+                                               <div key={idx} className={`flex items-center justify-center text-[10px] font-black text-slate-300 uppercase ${orientation === 'landscape' ? 'w-48 text-center' : 'h-28 -rotate-90'}`}>
+                                                   {orientation === 'landscape' ? `Col ${idx + 1}` : `Rang ${idx + 1}`}
+                                               </div>
+                                           ))}
+                                       </div>
+                                       <div className={`flex items-start gap-12 relative z-10 ${orientation === 'landscape' ? 'flex-row' : 'flex-col'}`}>
+                                           {zigZagPairs.map((pair, i) => {
+                                               const isLastCol = i === zigZagPairs.length - 1;
+                                               const topIdx = pair.top.originalIndex;
+                                               const botIdx = pair.bottom?.originalIndex;
+                                               
+                                               const isCluster = pair.top.isFeeder && pair.bottom && pair.top.feedsInto === pair.bottom.id.split('__')[0];
+
+                                               return (
+                                                   <div key={i} className={`flex gap-20 relative ${orientation === 'landscape' ? 'flex-col' : 'flex-row items-center items-stretch'}`}>
+                                                       {showDimensions && (<div className={`absolute ${orientation === 'landscape' ? '-top-6 left-1/2 -translate-x-1/2 w-0.5 h-[150%]' : 'left-1/2 top-1/2 -translate-y-1/2 h-0.5 w-[150%]'} bg-yellow-400/30 z-0`}></div>)}
+                                                       
+                                                       <div className="relative">
+                                                           <StationCard station={pair.top} />
+                                                           {showDimensions && <div className="absolute -top-5 left-0 w-full text-center text-[8px] font-bold text-yellow-600 bg-yellow-50 rounded">Rail Élec.</div>}
+                                                           
+                                                           {/* VISUAL CONNECTOR 1: REMOVED */}
+                                                       </div>
+                                                       
+                                                       {/* Bottom Card Wrapper with SHIFT */}
+                                                       <div className={`relative ${orientation === 'landscape' ? 'translate-x-32' : ''}`}>
+                                                           {pair.bottom ? (<><StationCard station={pair.bottom} />{showDimensions && !isLastCol && (<div className={`absolute ${orientation === 'landscape' ? 'top-1/2 -right-6 w-6 h-px' : 'left-1/2 -bottom-6 h-6 w-px'} bg-slate-300 flex items-center justify-center`}><div className={`text-[7px] bg-slate-100 text-slate-500 font-bold px-0.5 rounded ${orientation === 'landscape' ? 'transform -rotate-90' : ''}`}>1.2m</div></div>)}</>) : (
+                                                               !isManualMode && <div className="w-36 sm:w-40 h-16 border-2 border-dashed border-slate-200 rounded-lg flex items-center justify-center text-[10px] text-slate-300 font-bold uppercase">Zone Tampon</div>
+                                                           )}
+                                                           {showDimensions && !isLastCol && pair.bottom && (<div className={`absolute ${orientation === 'landscape' ? 'top-1/2 -right-6 w-6' : 'left-1/2 -bottom-6 h-6'}`}>{orientation === 'landscape' ? <DimensionMarkerHorizontal label="0.6m" /> : <DimensionMarkerVertical label="0.6m" />}</div>)}
+                                                           
+                                                           {/* VISUAL CONNECTOR 2: REMOVED */}
+                                                       </div>
+                                                   </div>
+                                               );
+                                           })}
+                                           <div className={`flex flex-col justify-end h-full pb-6 pl-3 ${orientation === 'landscape' ? '' : 'pt-6'}`}>
+                                               <div className="flex items-center gap-2 px-3 py-2 bg-slate-800 text-white rounded-lg shadow-lg">
+                                                   <Truck className="w-4 h-4" /> <span className="text-xs font-bold uppercase">Expédition</span>
+                                               </div>
                                            </div>
                                        </div>
                                    </div>
                                </div>
-                           </div>
-                       )}
-                           
+                           )}
+                               
                            {/* OTHER LAYOUTS REMAIN SAME */}
                            {layoutType === 'grid' && (
                                <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
@@ -2101,11 +2515,89 @@ export default function Implantation({
            >
                <button onClick={() => handleContextAction('modify')} className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-2 transition-colors"><PenTool className="w-3.5 h-3.5 text-indigo-500" /> Modifier Poste</button>
                <button onClick={() => handleContextAction('swap')} className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-2 transition-colors"><ArrowRightLeft className="w-3.5 h-3.5 text-orange-500" /> Échanger (Swap)</button>
+               {layoutType === 'free' && (
+                   <>
+                       <div className="h-px bg-slate-100 my-1"></div>
+                       <button onClick={() => handleContextAction('rotate')} className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-2 transition-colors"><RotateCw className="w-3.5 h-3.5 text-blue-500" /> Rotation (+45°)</button>
+                       <div className="px-4 py-1 text-[9px] font-bold text-slate-400 uppercase mt-1">Forme</div>
+                       <button onClick={() => handleContextAction('shape_rect')} className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-2 transition-colors"><Square className="w-3.5 h-3.5 text-slate-500" /> Rectangle</button>
+                       <button onClick={() => handleContextAction('shape_circle')} className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-2 transition-colors"><Circle className="w-3.5 h-3.5 text-slate-500" /> Cercle / Rond</button>
+                   </>
+               )}
                <div className="h-px bg-slate-100 my-1"></div>
                <button onClick={() => handleContextAction('insert')} className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-2 transition-colors"><Plus className="w-3.5 h-3.5 text-emerald-500" /> Insérer Vide</button>
                <button onClick={() => handleContextAction('delete')} className="w-full text-left px-4 py-2.5 hover:bg-rose-50 text-rose-600 flex items-center gap-2 transition-colors"><Trash2 className="w-3.5 h-3.5" /> Supprimer</button>
            </div>,
            document.body
+       )}
+
+       {/* FREE MODE BACKGROUND CONTEXT MENU */}
+       {freeContextMenu && freeContextMenu.visible && createPortal(
+           <div 
+               className="absolute z-[9999] bg-white border border-slate-200 rounded-xl shadow-2xl py-1 w-56 text-xs font-medium text-slate-700 animate-in fade-in zoom-in-95 duration-100 origin-top-left overflow-hidden ring-4 ring-slate-100/50"
+               style={{ top: freeContextMenu.y, left: freeContextMenu.x }}
+               onClick={(e) => e.stopPropagation()} 
+           >
+               <div className="px-4 py-2 bg-slate-50 border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Ajouter Élément</div>
+               <button onClick={() => handleAddFreeItem('poste')} className="w-full text-left px-4 py-3 hover:bg-indigo-50 flex items-center gap-3 transition-colors text-indigo-700 font-bold"><Plus className="w-4 h-4" /> Nouveau Poste</button>
+               <div className="h-px bg-slate-100 my-1"></div>
+               <button onClick={() => handleAddFreeItem('circle')} className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-2 transition-colors"><Circle className="w-3.5 h-3.5 text-slate-500" /> Zone Circulaire</button>
+               <button onClick={() => handleAddFreeItem('rect')} className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-2 transition-colors"><BoxSelect className="w-3.5 h-3.5 text-slate-500" /> Zone Rectangulaire</button>
+           </div>,
+           document.body
+       )}
+
+       {/* SAVE TEMPLATE MODAL */}
+       {showSaveTemplateModal && (
+           <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
+               <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setShowSaveTemplateModal(false)} />
+               <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm relative overflow-hidden animate-in fade-in zoom-in-95 duration-200 p-6">
+                   <h3 className="font-bold text-slate-800 text-lg mb-4">Sauvegarder le Gabarit</h3>
+                   <input 
+                       type="text" 
+                       autoFocus
+                       placeholder="Nom du gabarit (ex: Standard T-Shirt)"
+                       value={templateName}
+                       onChange={(e) => setTemplateName(e.target.value)}
+                       className="w-full border border-slate-300 rounded-xl px-4 py-3 mb-6 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all text-sm font-medium"
+                   />
+                   <div className="flex gap-3">
+                       <button onClick={() => setShowSaveTemplateModal(false)} className="flex-1 py-2.5 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-colors text-xs">Annuler</button>
+                       <button onClick={handleSaveTemplate} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 shadow-md shadow-indigo-200 transition-colors text-xs">Enregistrer</button>
+                   </div>
+               </div>
+           </div>
+       )}
+
+       {/* LOAD TEMPLATE MODAL */}
+       {showLoadTemplateModal && (
+           <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
+               <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setShowLoadTemplateModal(false)} />
+               <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md relative overflow-hidden animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[80vh]">
+                   <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                       <h3 className="font-bold text-slate-700">Mes Gabarits</h3>
+                       <button onClick={() => setShowLoadTemplateModal(false)}><X className="w-5 h-5 text-slate-400 hover:text-slate-600"/></button>
+                   </div>
+                   <div className="p-2 overflow-y-auto custom-scrollbar flex-1">
+                       {savedLayouts.length === 0 ? (
+                           <div className="text-center py-10 text-slate-400 text-sm">Aucun gabarit enregistré.</div>
+                       ) : (
+                           savedLayouts.map(layout => (
+                               <div key={layout.id} className="flex items-center justify-between p-3 hover:bg-slate-50 rounded-lg border-b border-slate-50 group">
+                                   <div>
+                                       <div className="font-bold text-slate-700 text-sm">{layout.name}</div>
+                                       <div className="text-[10px] text-slate-400">{new Date(layout.date).toLocaleDateString()} • {layout.postes.length} éléments</div>
+                                   </div>
+                                   <div className="flex items-center gap-2">
+                                       <button onClick={() => handleLoadTemplate(layout)} className="px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg text-xs font-bold hover:bg-indigo-100 transition-colors">Charger</button>
+                                       <button onClick={() => handleDeleteTemplate(layout.id)} className="p-1.5 text-slate-300 hover:text-rose-500 rounded transition-colors"><Trash2 className="w-4 h-4" /></button>
+                                   </div>
+                               </div>
+                           ))
+                       )}
+                   </div>
+               </div>
+           </div>
        )}
     </div>
   );

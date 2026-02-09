@@ -26,11 +26,13 @@ import {
   Coins, 
   Palette,
   ChevronDown,
-  LayoutGrid
+  LayoutGrid,
+  Loader2
 } from 'lucide-react';
 import { FicheData } from '../types';
 import { TEXTILE_COLORS, TEXTILE_FABRICS } from '../data/textileData';
 import ExcelInput from './ExcelInput';
+import { compressImage } from '../utils';
 
 interface FicheTechniqueProps {
   data: FicheData;
@@ -72,6 +74,9 @@ export default function FicheTechnique({
   const frontInputRef = useRef<HTMLInputElement>(null);
   const backInputRef = useRef<HTMLInputElement>(null);
   
+  // Loading state for compression
+  const [isProcessingImg, setIsProcessingImg] = useState<string | null>(null);
+
   // -- Image Preview Modal State --
   const [previewImage, setPreviewImage] = useState<{ src: string, title: string } | null>(null);
 
@@ -133,14 +138,19 @@ export default function FicheTechnique({
   }, [matrixStats.grandTotal, setData]);
 
   // --- HANDLERS ---
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'front' | 'back') => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'front' | 'back') => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImages(prev => ({ ...prev, [type]: reader.result as string }));
-      };
-      reader.readAsDataURL(file);
+      setIsProcessingImg(type);
+      try {
+        const compressedBase64 = await compressImage(file);
+        setImages(prev => ({ ...prev, [type]: compressedBase64 }));
+      } catch (error) {
+        console.error("Image compression failed", error);
+        alert("Erreur lors du traitement de l'image.");
+      } finally {
+        setIsProcessingImg(null);
+      }
     }
   };
 
@@ -578,14 +588,19 @@ export default function FicheTechnique({
                         <button onClick={() => frontInputRef.current?.click()} className="p-1 hover:bg-slate-200 rounded text-indigo-500"><Upload className="w-3 h-3" /></button>
                      </div>
                      <div 
-                        className="flex-1 bg-slate-100 relative cursor-pointer overflow-hidden" 
+                        className="flex-1 bg-slate-100 relative cursor-pointer overflow-hidden flex items-center justify-center" 
                         onClick={() => {
                             if(images.front) setPreviewImage({ src: images.front, title: 'Devant' });
                             else frontInputRef.current?.click();
                         }}
                      >
                         <input type="file" ref={frontInputRef} className="hidden" accept="image/*" onChange={(e) => handleImageUpload(e, 'front')} />
-                        {images.front ? (
+                        {isProcessingImg === 'front' ? (
+                            <div className="flex flex-col items-center gap-2 text-indigo-500">
+                                <Loader2 className="w-6 h-6 animate-spin" />
+                                <span className="text-[9px] font-bold uppercase">Compression...</span>
+                            </div>
+                        ) : images.front ? (
                             <>
                                 <img src={images.front} alt="Front" className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
@@ -608,14 +623,19 @@ export default function FicheTechnique({
                         <button onClick={() => backInputRef.current?.click()} className="p-1 hover:bg-slate-200 rounded text-indigo-500"><Upload className="w-3 h-3" /></button>
                      </div>
                      <div 
-                        className="flex-1 bg-slate-100 relative cursor-pointer overflow-hidden" 
+                        className="flex-1 bg-slate-100 relative cursor-pointer overflow-hidden flex items-center justify-center" 
                         onClick={() => {
                             if(images.back) setPreviewImage({ src: images.back, title: 'Dos' });
                             else backInputRef.current?.click();
                         }}
                      >
                         <input type="file" ref={backInputRef} className="hidden" accept="image/*" onChange={(e) => handleImageUpload(e, 'back')} />
-                        {images.back ? (
+                        {isProcessingImg === 'back' ? (
+                            <div className="flex flex-col items-center gap-2 text-indigo-500">
+                                <Loader2 className="w-6 h-6 animate-spin" />
+                                <span className="text-[9px] font-bold uppercase">Compression...</span>
+                            </div>
+                        ) : images.back ? (
                             <>
                                 <img src={images.back} alt="Back" className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
