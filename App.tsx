@@ -60,6 +60,7 @@ const DEFAULT_GUIDES: Guide[] = [
 ];
 
 const AUTO_SAVE_KEY = 'beramethode_autosave_v1';
+const LIBRARY_KEY = 'beramethode_library'; // New Key for Persistence
 
 // History State Type
 type HistoryState = {
@@ -267,8 +268,35 @@ export default function App() {
       return { totalTime, tempsArticle, bf: calculatedBF };
   }, [operations, numWorkers, presenceTime, efficiency]);
 
-  // --- LIBRARY STATE ---
+  // --- LIBRARY STATE & PERSISTENCE ---
   const [models, setModels] = useState<ModelData[]>([]);
+
+  // 1. Load Library on Mount
+  useEffect(() => {
+      const savedLibrary = localStorage.getItem(LIBRARY_KEY);
+      if (savedLibrary) {
+          try {
+              const parsed = JSON.parse(savedLibrary);
+              if (Array.isArray(parsed)) {
+                  setModels(parsed);
+              }
+          } catch (e) {
+              console.error("Failed to load Library", e);
+          }
+      }
+  }, []);
+
+  // 2. Persist Library on Change
+  useEffect(() => {
+      if (models.length > 0) {
+          try {
+              localStorage.setItem(LIBRARY_KEY, JSON.stringify(models));
+          } catch (e) {
+              console.error("Failed to save Library (Quota?)", e);
+              // alert("Attention: La mémoire du navigateur est pleine. Certains modèles ne seront pas sauvegardés.");
+          }
+      }
+  }, [models]);
 
   // --- ACTIONS ---
   const handleSaveMachine = (m: Machine) => {

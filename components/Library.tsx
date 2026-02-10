@@ -22,7 +22,12 @@ import {
   LayoutGrid,
   ZoomIn,
   ZoomOut,
-  List as ListIcon
+  List as ListIcon,
+  Database,
+  UploadCloud,
+  DownloadCloud,
+  CheckCircle2,
+  Loader2
 } from 'lucide-react';
 import { ModelData } from '../types';
 
@@ -50,8 +55,11 @@ export default function Library({
   const [cardSize, setCardSize] = useState(340); // Increased default card width
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   
-  // File Input Ref
+  // File Input Ref for Model Import
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // File Input Ref for DB Restore
+  const dbInputRef = useRef<HTMLInputElement>(null);
 
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; modelId: string } | null>(null);
@@ -62,6 +70,9 @@ export default function Library({
 
   // Delete Confirmation State
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string, name: string } | null>(null);
+
+  // Status for Backup/Restore
+  const [dbStatus, setDbStatus] = useState<'idle' | 'processing' | 'success' | 'error'>('idle');
 
   // Close context menu on global click
   useEffect(() => {
@@ -81,10 +92,94 @@ export default function Library({
 
   const triggerFileInput = () => {
       if (fileInputRef.current) {
-          // Reset value to allow selecting the same file again if needed
           fileInputRef.current.value = '';
           fileInputRef.current.click();
       }
+  };
+
+  // --- DATABASE BACKUP & RESTORE ---
+  const handleBackupDatabase = () => {
+      setDbStatus('processing');
+      try {
+          // 1. Gather all data
+          const library = localStorage.getItem('beramethode_library');
+          const autosave = localStorage.getItem('beramethode_autosave_v1');
+          const layouts = localStorage.getItem('beramethode_layouts');
+          
+          const backupData = {
+              type: 'BERAMETHODE_FULL_BACKUP',
+              date: new Date().toISOString(),
+              version: 1,
+              data: {
+                  library: library ? JSON.parse(library) : [],
+                  autosave: autosave ? JSON.parse(autosave) : null,
+                  layouts: layouts ? JSON.parse(layouts) : []
+              }
+          };
+
+          // 2. Create Blob
+          const jsonString = JSON.stringify(backupData, null, 2);
+          const blob = new Blob([jsonString], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          
+          // 3. Download
+          const downloadAnchorNode = document.createElement('a');
+          downloadAnchorNode.setAttribute("href", url);
+          const dateStr = new Date().toISOString().slice(0, 10);
+          downloadAnchorNode.setAttribute("download", `beramethode_backup_${dateStr}.json`);
+          document.body.appendChild(downloadAnchorNode);
+          downloadAnchorNode.click();
+          downloadAnchorNode.remove();
+          
+          setTimeout(() => URL.revokeObjectURL(url), 100);
+          setDbStatus('success');
+          setTimeout(() => setDbStatus('idle'), 2000);
+
+      } catch (e) {
+          console.error("Backup failed", e);
+          setDbStatus('error');
+          setTimeout(() => setDbStatus('idle'), 3000);
+      }
+  };
+
+  const handleRestoreDatabase = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      if (!window.confirm("ATTENTION : Cette action va remplacer toutes vos données actuelles (modèles, sauvegarde auto, templates) par celles du fichier.\n\nVoulez-vous continuer ?")) {
+          e.target.value = ''; // Reset
+          return;
+      }
+
+      setDbStatus('processing');
+      const reader = new FileReader();
+      reader.onload = (event) => {
+          try {
+              const json = JSON.parse(event.target?.result as string);
+              
+              if (json.type !== 'BERAMETHODE_FULL_BACKUP' || !json.data) {
+                  throw new Error("Format de fichier invalide");
+              }
+
+              // Restore Items
+              if (json.data.library) localStorage.setItem('beramethode_library', JSON.stringify(json.data.library));
+              if (json.data.autosave) localStorage.setItem('beramethode_autosave_v1', JSON.stringify(json.data.autosave));
+              if (json.data.layouts) localStorage.setItem('beramethode_layouts', JSON.stringify(json.data.layouts));
+
+              setDbStatus('success');
+              alert("Restauration terminée avec succès ! La page va se recharger.");
+              window.location.reload();
+
+          } catch (err) {
+              console.error("Restore failed", err);
+              alert("Erreur lors de la restauration. Vérifiez le fichier.");
+              setDbStatus('error');
+          } finally {
+              setDbStatus('idle');
+              if (dbInputRef.current) dbInputRef.current.value = '';
+          }
+      };
+      reader.readAsText(file);
   };
 
   const handleRenameStart = (model: ModelData) => {
@@ -194,7 +289,39 @@ export default function Library({
 
             <div className="h-6 w-px bg-slate-200 mx-1 hidden xl:block"></div>
 
-            {/* IMPORT BUTTON */}
+            {/* DB Management Group */}
+            <div className="flex items-center bg-slate-100 rounded-lg p-0.5 border border-slate-200">
+                <button 
+                    onClick={handleBackupDatabase}
+                    disabled={dbStatus === 'processing'}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[10px] font-bold transition-all ${dbStatus === 'success' ? 'bg-emerald-500 text-white' : 'hover:bg-white text-slate-600'}`}
+                    title="Sauvegarder toute la base de données (Backup)"
+                >
+                    {dbStatus === 'processing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : (dbStatus === 'success' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <DownloadCloud className="w-3.5 h-3.5" />)}
+                    <span className="hidden sm:inline">Backup</span>
+                </button>
+                
+                <div className="w-px h-4 bg-slate-300 mx-1"></div>
+                
+                <button 
+                    onClick={() => dbInputRef.current?.click()}
+                    disabled={dbStatus === 'processing'}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[10px] font-bold hover:bg-white text-slate-600 transition-all"
+                    title="Restaurer une base de données"
+                >
+                    <UploadCloud className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Restaurer</span>
+                </button>
+                <input 
+                    type="file" 
+                    accept=".json" 
+                    ref={dbInputRef} 
+                    className="hidden" 
+                    onChange={handleRestoreDatabase} 
+                />
+            </div>
+
+            {/* Import Single Model (Legacy) */}
             <input 
                 type="file" 
                 accept=".json" 
@@ -204,10 +331,10 @@ export default function Library({
             />
             <button 
                 onClick={triggerFileInput}
-                className="flex items-center gap-2 px-3 py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-xl font-bold text-xs border border-slate-200 transition-colors"
+                className="p-2 bg-white hover:bg-slate-50 text-slate-500 rounded-xl border border-slate-200 transition-colors"
+                title="Importer un modèle unique"
             >
-                <Upload className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Importer</span>
+                <Upload className="w-4 h-4" />
             </button>
 
             {/* VIEW MODE TOGGLE */}
@@ -228,26 +355,8 @@ export default function Library({
                 </button>
             </div>
 
-            {/* ZOOM CONTROL (Visible only in Grid) */}
-            {viewMode === 'grid' && (
-                <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5">
-                    <ZoomOut className="w-3.5 h-3.5 text-slate-400" />
-                    <input 
-                        type="range" 
-                        min="180" 
-                        max="500" 
-                        step="20"
-                        value={cardSize} 
-                        onChange={(e) => setCardSize(Number(e.target.value))}
-                        className="w-16 h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
-                        title="Ajuster la taille des cartes"
-                    />
-                    <ZoomIn className="w-3.5 h-3.5 text-slate-400" />
-                </div>
-            )}
-
             {/* Search */}
-            <div className="relative flex-1 min-w-[150px] xl:w-48">
+            <div className="relative flex-1 min-w-[150px] xl:w-40">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
               <input 
                 type="text" 

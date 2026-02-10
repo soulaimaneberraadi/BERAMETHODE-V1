@@ -1,6 +1,10 @@
+
 import React, { useRef, useEffect, useState } from 'react';
-import { FileDown, X, Palette, Minus, Plus, Maximize, Smartphone, Monitor, Layout, Check, Grid3X3 } from 'lucide-react';
+import { FileDown, X, Palette, Minus, Plus, Maximize, Smartphone, Monitor, Layout, Check, Grid3X3, Loader2 } from 'lucide-react';
 import { PdfSettings } from '../types';
+
+// Declare html2pdf globally since it is loaded via CDN
+declare var html2pdf: any;
 
 interface PdfSettingsModalProps {
   t: any;
@@ -22,6 +26,8 @@ const PdfSettingsModal: React.FC<PdfSettingsModalProps> = ({
 }) => {
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [localGenerating, setLocalGenerating] = useState(false);
 
   // Measure container for auto-scaling
   useEffect(() => {
@@ -43,7 +49,10 @@ const PdfSettingsModal: React.FC<PdfSettingsModalProps> = ({
 
   // Calculate Scale to fit container
   const isLandscape = pdfSettings.orientation === 'landscape';
-  const paperWidth = isLandscape ? 1123 : 794; // A4 dimensions in px at 96 DPI
+  // A4 Dimensions in Pixels (approx 96 DPI)
+  // Portrait: 794px x 1123px
+  // Landscape: 1123px x 794px
+  const paperWidth = isLandscape ? 1123 : 794; 
   const paperHeight = isLandscape ? 794 : 1123;
   
   // Padding around the paper in the preview
@@ -58,8 +67,75 @@ const PdfSettingsModal: React.FC<PdfSettingsModalProps> = ({
   // Final display scale combines fit-to-screen and user manual zoom
   const displayScale = fitScale * pdfSettings.scale;
 
+  // --- ROBUST PDF GENERATION LOGIC ---
+  const handleDownload = async () => {
+      if (localGenerating) return;
+      setLocalGenerating(true);
+
+      try {
+          const element = contentRef.current;
+          if (!element) throw new Error("Content not found");
+
+          // 1. Clone the element to avoid messing with the preview
+          const clone = element.cloneNode(true) as HTMLElement;
+          
+          // 2. Setup styles for the clone to ensure full capture (No Scrollbars, No Zoom effects)
+          clone.style.width = `${paperWidth}px`;
+          clone.style.height = `${paperHeight}px`; // Force exact A4 height or 'auto' if multipage
+          clone.style.transform = 'none'; // Remove preview scaling
+          clone.style.position = 'fixed';
+          clone.style.top = '-9999px';
+          clone.style.left = '-9999px';
+          clone.style.zIndex = '-100';
+          clone.style.overflow = 'visible'; // Ensure content isn't clipped
+          
+          // Remove any 'grayscale' class if Color Mode is 'color' (logic handled in CSS classes, but ensure clone is clean)
+          if (pdfSettings.colorMode === 'color') {
+              clone.classList.remove('grayscale');
+          } else {
+              clone.classList.add('grayscale');
+          }
+
+          document.body.appendChild(clone);
+
+          // 3. Configure html2pdf options
+          const opt = {
+            margin: 0, // No margin, the component handles padding
+            filename: `Fiche_Technique_${new Date().toISOString().split('T')[0]}.pdf`,
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { 
+                scale: 2, // 2x scale for Retina-like crispness
+                useCORS: true, 
+                logging: false,
+                scrollY: 0,
+                windowWidth: paperWidth,
+                windowHeight: paperHeight
+            },
+            jsPDF: { 
+                unit: 'px', 
+                format: [paperWidth, paperHeight], 
+                orientation: pdfSettings.orientation 
+            }
+          };
+
+          // 4. Generate
+          await html2pdf().set(opt).from(clone).save();
+
+          // 5. Cleanup
+          document.body.removeChild(clone);
+
+      } catch (error) {
+          console.error("PDF Generation failed:", error);
+          alert("Erreur lors de la génération du PDF. Veuillez réessayer.");
+      } finally {
+          setLocalGenerating(false);
+          // Optional: Close modal after save
+          // setShowPdfModal(false);
+      }
+  };
+
   return (
-    <div className="fixed inset-0 bg-slate-900/90 z-50 flex items-center justify-center backdrop-blur-md animate-in fade-in duration-200">
+    <div className="fixed inset-0 bg-slate-900/90 z-[9999] flex items-center justify-center backdrop-blur-md animate-in fade-in duration-200">
       
       {/* Main Modal Container */}
       <div className={`w-full h-full md:w-[95vw] md:h-[90vh] md:max-w-7xl md:rounded-2xl shadow-2xl overflow-hidden flex flex-col md:flex-row ${darkMode ? 'bg-gray-900 border border-gray-700' : 'bg-white'}`}>
@@ -191,17 +267,17 @@ const PdfSettingsModal: React.FC<PdfSettingsModalProps> = ({
           {/* Footer Actions */}
           <div className={`p-5 border-t ${darkMode ? 'border-gray-700 bg-gray-850' : 'border-slate-200 bg-slate-50'}`}>
              <button 
-                onClick={() => generatePDF('save')} 
-                disabled={!isLibLoaded || isGeneratingPdf} 
+                onClick={handleDownload} 
+                disabled={localGenerating} 
                 className={`w-full py-4 rounded-xl font-bold text-sm shadow-lg shadow-green-500/20 flex items-center justify-center gap-2 transition-all transform active:scale-[0.98] ${
-                    isGeneratingPdf 
+                    localGenerating 
                     ? 'bg-slate-300 text-slate-500 cursor-not-allowed' 
                     : 'bg-green-600 hover:bg-green-500 text-white'
                 }`}
              >
-                {isGeneratingPdf ? (
+                {localGenerating ? (
                     <>
-                        <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+                        <Loader2 className="w-4 h-4 animate-spin" />
                         <span>Génération en cours...</span>
                     </>
                 ) : (
@@ -211,11 +287,6 @@ const PdfSettingsModal: React.FC<PdfSettingsModalProps> = ({
                     </>
                 )}
              </button>
-             {!isLibLoaded && (
-                <p className="text-[10px] text-center mt-2 text-red-500 animate-pulse">
-                    Chargement de la librairie PDF...
-                </p>
-             )}
           </div>
         </div>
 
@@ -254,6 +325,9 @@ const PdfSettingsModal: React.FC<PdfSettingsModalProps> = ({
                         transformOrigin: 'center center',
                         boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)'
                     }}
+                    // This REF is the source of the PDF
+                    ref={contentRef}
+                    id="pdf-content-source"
                     className={`bg-white relative overflow-hidden ${pdfSettings.colorMode === 'grayscale' ? 'grayscale' : ''}`}
                 >
                     {/* Render Children (Live Component) */}

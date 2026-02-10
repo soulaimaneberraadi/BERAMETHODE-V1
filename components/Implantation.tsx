@@ -84,8 +84,13 @@ import {
   BoxSelect,
   Circle,
   Square,
-  FolderOpen
+  FolderOpen,
+  Image as ImageIcon,
+  Loader2
 } from 'lucide-react';
+
+// Declare html2pdf globally
+declare var html2pdf: any;
 
 interface ImplantationProps {
   bf: number;
@@ -112,6 +117,7 @@ interface ImplantationProps {
   onSave?: () => void;
 }
 
+// ... (Rest of imports and types unchanged)
 // --- LINK DATA TYPE ---
 type ManualLink = {
     id: string;
@@ -120,7 +126,7 @@ type ManualLink = {
     label?: string; // Optional Comment
 };
 
-// --- GROUP COLOR PALETTE ---
+// ... (COLOR PALETTE definitions unchanged) ...
 const GROUP_COLORS = [
   { bg: 'bg-indigo-50', border: 'border-indigo-500', text: 'text-indigo-700' },
   { bg: 'bg-orange-50', border: 'border-orange-500', text: 'text-orange-700' },
@@ -146,7 +152,6 @@ const getGroupStyle = (groupId: string) => {
     return GROUP_COLORS[index];
 };
 
-// --- COLOR PALETTE ---
 const POSTE_COLORS = [
   { name: 'indigo',  bg: 'bg-indigo-50',  border: 'border-indigo-200',  text: 'text-indigo-700',  badge: 'bg-indigo-100',  fill: '#6366f1', badgeText: 'text-indigo-800' },
   { name: 'orange',  bg: 'bg-orange-50',  border: 'border-orange-200',  text: 'text-orange-700',  badge: 'bg-orange-100',  fill: '#f97316', badgeText: 'text-orange-800' },
@@ -199,8 +204,7 @@ interface Workstation extends Poste {
   status?: 'ok' | 'panne';
 }
 
-// --- HELPER COMPONENTS ---
-
+// ... (Helper Components: DimensionMarker, SpecialZoneControl, LinkOverlay UNCHANGED) ...
 const DimensionMarkerHorizontal = ({ label }: { label: string }) => (
     <div className="flex flex-col items-center w-full px-2 opacity-70 scale-90">
         <div className="flex items-center w-full text-[8px] text-slate-500 font-mono font-bold whitespace-nowrap">
@@ -232,7 +236,6 @@ const SpecialZoneControl = ({ label, type, icon: Icon, color, currentCount, onAd
     </div>
 );
 
-// --- LINK OVERLAY COMPONENT (SVG) - FIX FINAL ---
 const LinkOverlay = ({ 
     links, 
     stations, 
@@ -270,7 +273,6 @@ const LinkOverlay = ({
             const fromRect = fromEl.getBoundingClientRect();
             const toRect = toEl.getBoundingClientRect();
 
-            // Calculate coordinates relative to the SCALED CONTAINER
             const x1 = (fromRect.left - cRect.left) / zoom;
             const y1 = (fromRect.top - cRect.top) / zoom;
             const w1 = fromRect.width / zoom;
@@ -281,13 +283,11 @@ const LinkOverlay = ({
             const w2 = toRect.width / zoom;
             const h2 = toRect.height / zoom;
 
-            // Centers
             const cx1 = x1 + w1 / 2;
             const cy1 = y1 + h1 / 2;
             const cx2 = x2 + w2 / 2;
             const cy2 = y2 + h2 / 2;
 
-            // Determine Attachment Points
             const angle = Math.atan2(cy2 - cy1, cx2 - cx1) * 180 / Math.PI;
             
             const isRight = angle > -45 && angle <= 45;
@@ -354,7 +354,6 @@ const LinkOverlay = ({
             </defs>
             {paths.map(p => (
                 <g key={p.id}>
-                    {/* Transparent wide path for easier clicking */}
                     <path 
                         d={p.path} 
                         stroke="transparent" 
@@ -363,7 +362,6 @@ const LinkOverlay = ({
                         className="cursor-pointer pointer-events-auto"
                         onClick={() => onEditLabel(p.id, p.label)}
                     />
-                    {/* Visible Dashed Line */}
                     <path 
                         d={p.path} 
                         stroke="#94a3b8" 
@@ -454,6 +452,7 @@ export default function Implantation({
   const [isDraggingMat, setIsDraggingMat] = useState(false);
   const [isResizingMat, setIsResizingMat] = useState(false);
   const [isFullScreen, setIsFullScreen] = useState(false);
+  const [isExporting, setIsExporting] = useState(false); // Export State
   const matDragStart = useRef({ x: 0, y: 0, w: 0, h: 0, startX: 0, startY: 0 });
   
   // Free Mode Drag State
@@ -466,13 +465,69 @@ export default function Implantation({
   // NEW: Magnetic Mode State
   const [isMagnetic, setIsMagnetic] = useState(false);
 
-  // --- SAVED LAYOUTS (TEMPLATES) ---
+  // --- EXPORT FUNCTION ---
+  const handleExportPlan = async () => {
+      if (isExporting || !contentRef.current) return;
+      setIsExporting(true);
+
+      try {
+          const element = contentRef.current;
+          
+          // 1. Clone element to avoid zoom issues
+          const clone = element.cloneNode(true) as HTMLElement;
+          const originalTransform = element.style.transform;
+          
+          // Get bounds of content if in free mode to set PDF size accurately
+          // For now, we assume a large enough canvas or auto-size
+          const width = element.scrollWidth + 100; 
+          const height = element.scrollHeight + 100;
+
+          clone.style.width = `${width}px`;
+          clone.style.height = `${height}px`;
+          clone.style.transform = 'scale(1)'; // Reset zoom
+          clone.style.position = 'fixed';
+          clone.style.top = '-9999px';
+          clone.style.left = '-9999px';
+          clone.style.zIndex = '-100';
+          clone.style.backgroundColor = '#f1f5f9'; // Slate-100 background
+          
+          document.body.appendChild(clone);
+
+          const opt = {
+            margin: 10,
+            filename: `Plan_Implantation_${articleName.replace(/\s+/g, '_')}.pdf`,
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { 
+                scale: 2, 
+                useCORS: true, 
+                logging: false,
+                windowWidth: width,
+                windowHeight: height
+            },
+            jsPDF: { 
+                unit: 'px', 
+                format: [width + 20, height + 20], 
+                orientation: width > height ? 'landscape' : 'portrait' 
+            }
+          };
+
+          await html2pdf().set(opt).from(clone).save();
+          document.body.removeChild(clone);
+
+      } catch (error) {
+          console.error("Export failed:", error);
+          alert("Erreur lors de l'exportation du plan.");
+      } finally {
+          setIsExporting(false);
+      }
+  };
+
+  // ... (Rest of existing state & handlers) ...
   const [savedLayouts, setSavedLayouts] = useState<SavedLayout[]>([]);
   const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
   const [templateName, setTemplateName] = useState("");
   const [showLoadTemplateModal, setShowLoadTemplateModal] = useState(false);
 
-  // Load saved layouts from local storage on mount
   useEffect(() => {
       const saved = localStorage.getItem('beramethode_layouts');
       if (saved) {
@@ -484,7 +539,6 @@ export default function Implantation({
       }
   }, []);
 
-  // Save layouts to local storage
   const persistLayouts = (layouts: SavedLayout[]) => {
       localStorage.setItem('beramethode_layouts', JSON.stringify(layouts));
       setSavedLayouts(layouts);
@@ -496,7 +550,7 @@ export default function Implantation({
           id: Date.now().toString(),
           name: templateName,
           date: new Date().toISOString(),
-          postes: postes // Save current positions and props
+          postes: postes 
       };
       persistLayouts([...savedLayouts, newTemplate]);
       setTemplateName("");
@@ -508,7 +562,7 @@ export default function Implantation({
   const handleLoadTemplate = (layout: SavedLayout) => {
       if (setPostes) {
           setPostes(layout.postes);
-          setLayoutType('free'); // Switch to free mode to see positions
+          setLayoutType('free'); 
           setShowLoadTemplateModal(false);
       }
   };
@@ -517,13 +571,11 @@ export default function Implantation({
       persistLayouts(savedLayouts.filter(l => l.id !== id));
   };
 
-  // --- MANUAL LINKING STATE ---
   const [manualLinks, setManualLinks] = useState<ManualLink[]>([]);
   const [isLinking, setIsLinking] = useState(false);
   const [linkSource, setLinkSource] = useState<string | null>(null);
   const [showLinks, setShowLinks] = useState(true);
 
-  // --- SWAP & CONTEXT MENU STATES ---
   const [swapSourceId, setSwapSourceId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     visible: boolean;
@@ -532,12 +584,11 @@ export default function Implantation({
     station: Workstation | null;
   } | null>(null);
 
-  // Free Mode Context Menu
   const [freeContextMenu, setFreeContextMenu] = useState<{
       visible: boolean;
       x: number;
       y: number;
-      canvasX: number; // Internal canvas coordinates
+      canvasX: number; 
       canvasY: number;
   } | null>(null);
 
@@ -557,6 +608,7 @@ export default function Implantation({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
+  // ... (Event Handlers: Click, Drag, Drop, Context, etc.) ...
   useEffect(() => {
     const handleClick = () => {
         setContextMenu(null);
@@ -566,7 +618,6 @@ export default function Implantation({
     return () => window.removeEventListener('click', handleClick);
   }, []);
 
-  // --- FREE MODE CONTEXT MENU HANDLER ---
   const handleFreeContextMenu = (e: React.MouseEvent) => {
       if (layoutType !== 'free') return;
       e.preventDefault();
@@ -575,7 +626,6 @@ export default function Implantation({
       if (!container) return;
       const rect = container.getBoundingClientRect();
       
-      // Calculate coordinates inside the scaled canvas
       const canvasX = (e.clientX - rect.left) / zoom;
       const canvasY = (e.clientY - rect.top) / zoom;
 
@@ -594,7 +644,7 @@ export default function Implantation({
       const newItem: Poste = {
           id: `free-${Date.now()}`,
           name: type === 'poste' ? `P${postes.length + 1}` : (type === 'circle' ? 'Zone' : 'Area'),
-          machine: type === 'poste' ? 'MAN' : 'VIDE', // Use VIDE or MAN for now
+          machine: type === 'poste' ? 'MAN' : 'VIDE', 
           x: freeContextMenu.canvasX,
           y: freeContextMenu.canvasY,
           shape: type === 'poste' ? 'rect' : type === 'circle' ? 'circle' : 'zone',
@@ -606,9 +656,8 @@ export default function Implantation({
       setFreeContextMenu(null);
   };
 
-  // --- FREE MODE DRAG HANDLERS ---
   const handleFreeMouseDown = (e: React.MouseEvent, id: string, currentX: number, currentY: number) => {
-      if (e.button !== 0) return; // Left click only
+      if (e.button !== 0) return; 
       freeDragRef.current = {
           id,
           startX: e.clientX,
@@ -653,7 +702,6 @@ export default function Implantation({
       };
   }, [layoutType, zoom, setPostes]);
 
-  // --- ITEM ROTATION & SHAPE CHANGE ---
   const rotateStation = (stationId: string) => {
       if (!setPostes) return;
       setPostes(prev => prev.map(p => {
@@ -674,7 +722,6 @@ export default function Implantation({
       }));
   };
 
-  // --- LINKING HANDLERS ---
   const handleLinkClick = (stationId: string) => {
       if (!isLinking) return;
 
@@ -709,7 +756,6 @@ export default function Implantation({
       }
   };
 
-  // --- NATIVE FULLSCREEN LOGIC ---
   const toggleFullScreen = () => {
       if (!document.fullscreenElement) {
           if (fullscreenWrapperRef.current) {
@@ -730,7 +776,6 @@ export default function Implantation({
       return () => document.removeEventListener('fullscreenchange', handleFullScreenChange);
   }, []);
 
-  // --- MOUSE WHEEL ZOOM LOGIC ---
   useEffect(() => {
       const handleWheel = (e: WheelEvent) => {
           if (e.ctrlKey) {
@@ -778,10 +823,8 @@ export default function Implantation({
       return () => { window.removeEventListener('mousemove', handleMouseMove); window.removeEventListener('mouseup', handleMouseUp); };
   }, [isDraggingMat, isResizingMat]);
 
-  // --- LOGIC FOR RE-CALCULATING TIME ON EDIT ---
+  // ... (Calculation Logic: calculateOpTimeForEdit, etc. UNCHANGED) ...
   const calculateOpTimeForEdit = (op: Operation) => {
-      // ... (Rest of logic unchanged)
-      // Re-implementing strictly to satisfy XML output requirement of full file content
       const machine = machines.find(m => m.id === op.machineId) || machines.find(m => (m.name || '').toLowerCase() === (op.machineName || '').toLowerCase());
       const machineNameUpper = (machine?.name || op.machineName || 'MAN').toUpperCase();
       const isMan = machineNameUpper === 'MAN' || machineNameUpper.includes('MANUEL');
@@ -794,7 +837,6 @@ export default function Implantation({
           machineNameUpper.includes('OEILLET') ||
           machineNameUpper.includes('POSE');
 
-      // Get cycle time
       const getStandardCycleTime = (mName: string) => {
           const name = (mName || '').toLowerCase();
           const matchedStd = standardTimes.find(s => {
@@ -878,10 +920,9 @@ export default function Implantation({
       }));
   };
 
-  // --- INTELLIGENT SORTING & LINKING ---
+  // ... (Workstation Calculation, Waiting Stations, compactPostes... UNCHANGED) ...
   const workstations = useMemo(() => {
     if (postes && postes.length > 0 && assignments) {
-        
         let initialStations: Workstation[] = postes.map((p, realIndex) => {
              let totalTime = 0; let saturation = 0; let operators = 1;
              const assignedOps = operations.filter(op => assignments[op.id]?.some(aid => aid === p.id || (p.originalId && aid === p.originalId)));
@@ -935,26 +976,16 @@ export default function Implantation({
              }
 
              const isBroken = p.notes?.includes('#PANNE');
-             
-             // Pass x and y from Poste to Workstation
              return { ...p, index: 0, originalIndex: realIndex, operations: assignedOps, totalTime, saturation, operators, color, groups, feedsInto, isFeeder, gammeOrderMin, isPlaced: p.isPlaced, status: isBroken ? 'panne' : 'ok', x: p.x, y: p.y, rotation: p.rotation, shape: p.shape };
         });
 
         const sortedStations = [...initialStations]; 
-
         const expandedResult: Workstation[] = [];
         sortedStations.forEach((st, idx) => {
             const showOnCanvas = isManualMode ? (st.isPlaced === true) : true;
-            
-            // In Free mode, we show all stations regardless of manual mode state
-            
             if (showOnCanvas) {
                 if (st.originalId) {
-                    expandedResult.push({
-                         ...st,
-                         index: expandedResult.length + 1,
-                         isPlaced: true
-                     });
+                    expandedResult.push({ ...st, index: expandedResult.length + 1, isPlaced: true });
                 } else {
                     for(let i=1; i<=st.operators; i++) {
                          expandedResult.push({
@@ -969,65 +1000,37 @@ export default function Implantation({
                 }
             }
         });
-
         return expandedResult;
     }
     return [];
   }, [operations, bf, assignments, postes, isManualMode]);
 
-  // Mini-Gamme Data (Stations NOT placed yet)
   const waitingStations = useMemo(() => {
       if (!isManualMode || !postes) return [];
-      
       return postes.filter(p => !p.isPlaced && p.machine !== 'VIDE').map((p, idx) => {
           const assignedOps = operations.filter(op => assignments?.[op.id]?.some(aid => aid === p.id || (p.originalId && aid === p.originalId)));
           const groups = [...new Set(assignedOps.map(op => op.groupId).filter(Boolean) as string[])];
           const realIndex = postes.findIndex(station => station.id === p.id);
-          
           const pNum = parseInt(p.name.replace(/^P/i, ''));
           const effectiveIndex = !isNaN(pNum) ? pNum - 1 : realIndex;
           const realColor = getPosteColor(effectiveIndex, p.machine, p.colorName);
-          
           let totalTime = 0; let saturation = 0; let operators = 1;
           if (p.timeOverride !== undefined) {
                  totalTime = p.timeOverride;
-                 if (bf > 0) {
-                     operators = 1;
-                     saturation = (totalTime / bf) * 100;
-                 }
+                 if (bf > 0) { operators = 1; saturation = (totalTime / bf) * 100; }
           } else {
              assignedOps.forEach(op => { 
                  let sharingCount = 1;
-                 if (p.originalId) {
-                     sharingCount = postes.filter(x => x.originalId === p.originalId).length;
-                 } else {
-                     sharingCount = assignments[op.id]?.length || 1;
-                 }
+                 if (p.originalId) { sharingCount = postes.filter(x => x.originalId === p.originalId).length; } else { sharingCount = assignments[op.id]?.length || 1; }
                  totalTime += (op.time || 0) / sharingCount; 
              });
-             
              const nTheo = bf > 0 ? totalTime / bf : 0;
              operators = nTheo > 1.15 ? Math.ceil(nTheo) : (nTheo > 0 ? 1 : 0);
-             
-             if (p.originalId) {
-                 operators = 1;
-             }
-             
+             if (p.originalId) { operators = 1; }
              saturation = (operators > 0 && bf > 0) ? (totalTime / (operators * bf)) * 100 : 0;
           }
           operators = Math.max(1, operators);
-
-          return { 
-              ...p, 
-              operations: assignedOps, 
-              color: realColor,
-              groups: groups,
-              totalTime,
-              saturation,
-              operators: operators,
-              index: 0,
-              originalIndex: realIndex 
-          } as Workstation;
+          return { ...p, operations: assignedOps, color: realColor, groups: groups, totalTime, saturation, operators: operators, index: 0, originalIndex: realIndex } as Workstation;
       }).sort((a, b) => {
           const minA = a.operations.length > 0 ? Math.min(...a.operations.map(o => o.order)) : 9999;
           const minB = b.operations.length > 0 ? Math.min(...b.operations.map(o => o.order)) : 9999;
@@ -1035,78 +1038,26 @@ export default function Implantation({
       });
   }, [postes, isManualMode, operations, assignments, bf]);
 
-  const compactPostes = () => {
-      if (!setPostes || !postes) return;
-      const placed = postes.filter(p => p.isPlaced && p.machine !== 'VIDE');
-      const unplaced = postes.filter(p => !p.isPlaced && p.machine !== 'VIDE');
-      const emptySlotsNeeded = Math.max(0, 20 - placed.length);
-      const empties: Poste[] = Array.from({length: emptySlotsNeeded}).map((_, i) => ({
-          id: `empty-auto-${Date.now()}-${i}`,
-          name: `Slot`,
-          machine: 'VIDE',
-          isPlaced: true,
-          colorName: 'vide'
-      }));
-      
-      let pCount = 1;
-      const newPlaced = placed.map(p => ({ ...p, name: `P${pCount++}` }));
-      
-      setPostes([...newPlaced, ...empties, ...unplaced]);
-  };
-
-  const renumberStations = () => {
-      if (!setPostes || !postes) return;
-      
-      let pCount = 1;
-      const reindexed = postes.map((p) => {
-          if (p.isPlaced && p.machine !== 'VIDE') {
-              return { ...p, name: `P${pCount++}` };
-          }
-          return p;
-      });
-      setPostes(reindexed);
-  };
-
-  const toggleMagnetic = () => {
-      if (!isMagnetic) {
-          compactPostes();
-      }
-      setIsMagnetic(!isMagnetic);
-  };
-
+  const compactPostes = () => { if (!setPostes || !postes) return; const placed = postes.filter(p => p.isPlaced && p.machine !== 'VIDE'); const unplaced = postes.filter(p => !p.isPlaced && p.machine !== 'VIDE'); const emptySlotsNeeded = Math.max(0, 20 - placed.length); const empties: Poste[] = Array.from({length: emptySlotsNeeded}).map((_, i) => ({ id: `empty-auto-${Date.now()}-${i}`, name: `Slot`, machine: 'VIDE', isPlaced: true, colorName: 'vide' })); let pCount = 1; const newPlaced = placed.map(p => ({ ...p, name: `P${pCount++}` })); setPostes([...newPlaced, ...empties, ...unplaced]); };
+  const renumberStations = () => { if (!setPostes || !postes) return; let pCount = 1; const reindexed = postes.map((p) => { if (p.isPlaced && p.machine !== 'VIDE') { return { ...p, name: `P${pCount++}` }; } return p; }); setPostes(reindexed); };
+  const toggleMagnetic = () => { if (!isMagnetic) { compactPostes(); } setIsMagnetic(!isMagnetic); };
+  
   const handleManualDrop = (stationId: string) => {
       if (setPostes && postes) {
           const stationFromWaiting = postes.find(p => p.id === stationId && !p.isPlaced);
-          
           if (stationFromWaiting) {
               const newPostes = [...postes];
               const idx = newPostes.findIndex(p => p.id === stationId);
-              
               if (idx !== -1) {
                   const item = { ...newPostes[idx], isPlaced: true };
                   newPostes.splice(idx, 1);
-                  
                   if (isMagnetic) {
                       const firstEmptySlotIdx = newPostes.findIndex(p => p.machine === 'VIDE' && p.isPlaced);
-                      if (firstEmptySlotIdx !== -1) {
-                          newPostes[firstEmptySlotIdx] = item;
-                      } else {
-                          const placed = newPostes.filter(p => p.isPlaced);
-                          const unplaced = newPostes.filter(p => !p.isPlaced);
-                          newPostes.splice(0, newPostes.length, ...placed, item, ...unplaced);
-                      }
+                      if (firstEmptySlotIdx !== -1) { newPostes[firstEmptySlotIdx] = item; } else { const placed = newPostes.filter(p => p.isPlaced); const unplaced = newPostes.filter(p => !p.isPlaced); newPostes.splice(0, newPostes.length, ...placed, item, ...unplaced); }
                   } else {
                       const firstVideIndex = newPostes.findIndex(p => p.isPlaced && p.machine === 'VIDE');
-                      
-                      if (firstVideIndex !== -1) {
-                          newPostes[firstVideIndex] = item;
-                      } else {
-                          const placed = newPostes.filter(p => p.isPlaced);
-                          const unplaced = newPostes.filter(p => !p.isPlaced);
-                          newPostes.splice(0, newPostes.length, ...placed, item, ...unplaced);
-                      }
+                      if (firstVideIndex !== -1) { newPostes[firstVideIndex] = item; } else { const placed = newPostes.filter(p => p.isPlaced); const unplaced = newPostes.filter(p => !p.isPlaced); newPostes.splice(0, newPostes.length, ...placed, item, ...unplaced); }
                   }
-                  
                   setPostes(newPostes);
               }
           }
@@ -1119,299 +1070,41 @@ export default function Implantation({
           if (idx !== -1) {
               const newPostes = [...postes];
               const itemToRemove = { ...newPostes[idx], isPlaced: false };
-              
               if (isMagnetic) {
                   newPostes.splice(idx, 1);
                   newPostes.push(itemToRemove);
-                  const videItem: Poste = {
-                      id: `empty-auto-fill-${Date.now()}`,
-                      name: 'Slot',
-                      machine: 'VIDE',
-                      isPlaced: true,
-                      colorName: 'vide'
-                  };
+                  const videItem: Poste = { id: `empty-auto-fill-${Date.now()}`, name: 'Slot', machine: 'VIDE', isPlaced: true, colorName: 'vide' };
                   let lastPlacedIdx = -1;
-                  for (let i = newPostes.length - 1; i >= 0; i--) {
-                      if (newPostes[i].isPlaced) {
-                          lastPlacedIdx = i;
-                          break;
-                      }
-                  }
+                  for (let i = newPostes.length - 1; i >= 0; i--) { if (newPostes[i].isPlaced) { lastPlacedIdx = i; break; } }
                   newPostes.splice(lastPlacedIdx + 1, 0, videItem);
-
               } else {
-                  const videItem: Poste = {
-                      id: `empty-replaced-${Date.now()}`,
-                      name: 'Slot',
-                      machine: 'VIDE',
-                      isPlaced: true,
-                      colorName: 'vide'
-                  };
+                  const videItem: Poste = { id: `empty-replaced-${Date.now()}`, name: 'Slot', machine: 'VIDE', isPlaced: true, colorName: 'vide' };
                   newPostes[idx] = videItem;
                   newPostes.push(itemToRemove);
               }
-              
               setPostes(newPostes);
           }
       }
   };
 
-  const addSingleEmptySlot = () => {
-      if (!setPostes || !postes) return;
-      const newSlot: Poste = {
-          id: `empty-manual-${Date.now()}`,
-          name: 'Slot',
-          machine: 'VIDE',
-          isPlaced: true,
-          colorName: 'vide'
-      };
-      
-      const placed = postes.filter(p => p.isPlaced);
-      const unplaced = postes.filter(p => !p.isPlaced);
-      setPostes([...placed, newSlot, ...unplaced]);
-  };
+  // ... (Other helpers: addSingleEmptySlot, activateManualMode, etc. UNCHANGED) ...
+  const addSingleEmptySlot = () => { if (!setPostes || !postes) return; const newSlot: Poste = { id: `empty-manual-${Date.now()}`, name: 'Slot', machine: 'VIDE', isPlaced: true, colorName: 'vide' }; const placed = postes.filter(p => p.isPlaced); const unplaced = postes.filter(p => !p.isPlaced); setPostes([...placed, newSlot, ...unplaced]); };
+  const activateManualMode = () => { setIsManualMode(true); if (setPostes && postes) { const splitPosts: Poste[] = []; const realStations = postes.filter(p => p.machine !== 'VIDE'); realStations.forEach(p => { let totalTime = 0; if (p.timeOverride !== undefined) { totalTime = p.timeOverride; } else { const assignedOps = operations.filter(op => assignments?.[op.id]?.includes(p.id)); assignedOps.forEach(op => { const numAssigned = assignments[op.id]?.length || 1; totalTime += (op.time || 0) / numAssigned; }); } const nTheo = bf > 0 ? totalTime / bf : 0; let operatorCount = nTheo > 1.15 ? Math.ceil(nTheo) : (nTheo > 0 ? 1 : 0); operatorCount = Math.max(1, operatorCount); if (operatorCount > 1 && !p.originalId) { for (let i = 1; i <= operatorCount; i++) { splitPosts.push({ ...p, id: `${p.id}__split__${i}`, originalId: p.id, name: `${p.name}.${i}`, isPlaced: false }); } } else { splitPosts.push({ ...p, isPlaced: false }); } }); const emptySlots: Poste[] = Array.from({ length: 20 }).map((_, i) => ({ id: `empty-${Date.now()}-${i}`, name: `P${i+1}`, machine: 'VIDE', isPlaced: true, colorName: 'vide' })); setPostes([...emptySlots, ...splitPosts]); } };
+  const activateAutoMode = () => { setIsManualMode(false); if (setPostes && postes) { const newPostes = postes.filter(p => p.machine !== 'VIDE').map(p => ({ ...p, isPlaced: true })); setPostes(newPostes); } };
+  const refreshAuto = () => { setIsManualMode(false); if (setPostes && postes) { const newPostes = postes.filter(p => p.machine !== 'VIDE').map(p => ({ ...p, isPlaced: true })); setPostes(newPostes); } };
+  const saveManualLayout = () => { setSaveSuccess(true); setTimeout(() => setSaveSuccess(false), 3000); };
 
-  const activateManualMode = () => {
-      setIsManualMode(true);
-      if (setPostes && postes) {
-          const splitPosts: Poste[] = [];
-          
-          const realStations = postes.filter(p => p.machine !== 'VIDE');
-          
-          realStations.forEach(p => {
-              let totalTime = 0;
-              if (p.timeOverride !== undefined) {
-                  totalTime = p.timeOverride;
-              } else {
-                  const assignedOps = operations.filter(op => assignments?.[op.id]?.includes(p.id));
-                  assignedOps.forEach(op => { 
-                      const numAssigned = assignments[op.id]?.length || 1; 
-                      totalTime += (op.time || 0) / numAssigned; 
-                  });
-              }
-              const nTheo = bf > 0 ? totalTime / bf : 0;
-              let operatorCount = nTheo > 1.15 ? Math.ceil(nTheo) : (nTheo > 0 ? 1 : 0);
-              operatorCount = Math.max(1, operatorCount);
-
-              if (operatorCount > 1 && !p.originalId) {
-                  for (let i = 1; i <= operatorCount; i++) {
-                      splitPosts.push({
-                          ...p,
-                          id: `${p.id}__split__${i}`, 
-                          originalId: p.id,           
-                          name: `${p.name}.${i}`,
-                          isPlaced: false
-                      });
-                  }
-              } else {
-                  splitPosts.push({ ...p, isPlaced: false });
-              }
-          });
-          
-          const emptySlots: Poste[] = Array.from({ length: 20 }).map((_, i) => ({
-              id: `empty-${Date.now()}-${i}`,
-              name: `P${i+1}`,
-              machine: 'VIDE',
-              isPlaced: true,
-              colorName: 'vide'
-          }));
-
-          setPostes([...emptySlots, ...splitPosts]);
-      }
-  };
-
-  const activateAutoMode = () => {
-      setIsManualMode(false);
-      if (setPostes && postes) {
-          const newPostes = postes
-              .filter(p => p.machine !== 'VIDE')
-              .map(p => ({ ...p, isPlaced: true }));
-          setPostes(newPostes);
-      }
-  };
-
-  const refreshAuto = () => {
-      setIsManualMode(false);
-      if (setPostes && postes) {
-          const newPostes = postes
-              .filter(p => p.machine !== 'VIDE')
-              .map(p => ({ ...p, isPlaced: true }));
-          setPostes(newPostes);
-      }
-  };
-
-  const saveManualLayout = () => {
-      setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 3000);
-  };
-
-  useEffect(() => {
-    let interval: any; const totalSteps = Math.max(0, (workstations.length * 2) + 2);
-    if (simulationActive) { interval = setInterval(() => { setSimStep(prev => { if (prev >= totalSteps) { setSimulationActive(false); return totalSteps; } return prev + 1; }); }, 500); }
-    return () => clearInterval(interval);
-  }, [simulationActive, workstations.length]);
-
+  useEffect(() => { let interval: any; const totalSteps = Math.max(0, (workstations.length * 2) + 2); if (simulationActive) { interval = setInterval(() => { setSimStep(prev => { if (prev >= totalSteps) { setSimulationActive(false); return totalSteps; } return prev + 1; }); }, 500); } return () => clearInterval(interval); }, [simulationActive, workstations.length]);
   const toggleSimulation = () => { if (simulationActive) { setSimulationActive(false); } else { setSimStep(-1); setSimulationActive(true); } };
   const resetSimulation = () => { setSimulationActive(false); setSimStep(-1); };
   
-  const zigZagPairs = useMemo(() => { 
-      const pairs = [];
-      const usedIndices = new Set<number>();
-
-      if (isManualMode) {
-          for (let i = 0; i < workstations.length; i += 2) {
-              const top = workstations[i];
-              const bottom = workstations[i+1]; 
-              pairs.push({ top, bottom });
-          }
-      } else {
-          for (let i = 0; i < workstations.length; i++) {
-              if (usedIndices.has(i)) continue;
-              const current = workstations[i];
-              
-              let bottomCandidateIndex = -1;
-              if (current.isFeeder) {
-                  const targetBaseId = current.feedsInto;
-                  for (let j = i + 1; j < workstations.length; j++) {
-                      if (usedIndices.has(j)) continue;
-                      const candidate = workstations[j];
-                      const candidateBaseId = candidate.id.split('__')[0];
-                      if (candidateBaseId === targetBaseId) {
-                          bottomCandidateIndex = j;
-                          break; 
-                      }
-                  }
-              }
-
-              if (bottomCandidateIndex !== -1) {
-                  pairs.push({ top: current, bottom: workstations[bottomCandidateIndex] });
-                  usedIndices.add(i);
-                  usedIndices.add(bottomCandidateIndex);
-              } else {
-                  let nextIndex = i + 1;
-                  while (usedIndices.has(nextIndex) && nextIndex < workstations.length) nextIndex++;
-
-                  if (nextIndex < workstations.length) {
-                      pairs.push({ top: current, bottom: workstations[nextIndex] });
-                      usedIndices.add(i);
-                      usedIndices.add(nextIndex);
-                  } else {
-                      pairs.push({ top: current, bottom: undefined });
-                      usedIndices.add(i);
-                  }
-              }
-          }
-      }
-      return pairs; 
-  }, [workstations, isManualMode]);
-
-  const wheatGroups = useMemo(() => {
-      const groups = [];
-      let currentGroup: { left: Workstation | null, right: Workstation | null } = { left: null, right: null };
-      
-      workstations.forEach((st, i) => {
-          if (!currentGroup.left) {
-              currentGroup.left = st;
-          } else {
-              currentGroup.right = st;
-              groups.push(currentGroup);
-              currentGroup = { left: null, right: null };
-          }
-      });
-      
-      if (currentGroup.left) {
-          groups.push(currentGroup);
-      }
-      
-      return groups;
-  }, [workstations]);
-
+  const zigZagPairs = useMemo(() => { const pairs = []; const usedIndices = new Set<number>(); if (isManualMode) { for (let i = 0; i < workstations.length; i += 2) { const top = workstations[i]; const bottom = workstations[i+1]; pairs.push({ top, bottom }); } } else { for (let i = 0; i < workstations.length; i++) { if (usedIndices.has(i)) continue; const current = workstations[i]; let bottomCandidateIndex = -1; if (current.isFeeder) { const targetBaseId = current.feedsInto; for (let j = i + 1; j < workstations.length; j++) { if (usedIndices.has(j)) continue; const candidate = workstations[j]; const candidateBaseId = candidate.id.split('__')[0]; if (candidateBaseId === targetBaseId) { bottomCandidateIndex = j; break; } } } if (bottomCandidateIndex !== -1) { pairs.push({ top: current, bottom: workstations[bottomCandidateIndex] }); usedIndices.add(i); usedIndices.add(bottomCandidateIndex); } else { let nextIndex = i + 1; while (usedIndices.has(nextIndex) && nextIndex < workstations.length) nextIndex++; if (nextIndex < workstations.length) { pairs.push({ top: current, bottom: workstations[nextIndex] }); usedIndices.add(i); usedIndices.add(nextIndex); } else { pairs.push({ top: current, bottom: undefined }); usedIndices.add(i); } } } } return pairs; }, [workstations, isManualMode]);
+  const wheatGroups = useMemo(() => { const groups = []; let currentGroup: { left: Workstation | null, right: Workstation | null } = { left: null, right: null }; workstations.forEach((st, i) => { if (!currentGroup.left) { currentGroup.left = st; } else { currentGroup.right = st; groups.push(currentGroup); currentGroup = { left: null, right: null }; } }); if (currentGroup.left) { groups.push(currentGroup); } return groups; }, [workstations]);
   const machinesSummary = useMemo(() => { const summary: Record<string, number> = {}; let total = 0; workstations.forEach(st => { const mName = st.machine.toUpperCase().includes('MAN') ? 'MAN' : st.machine; if (!summary[mName]) summary[mName] = 0; summary[mName] += 1; total += 1; }); return { counts: Object.entries(summary), total }; }, [workstations]);
 
-  const handleDragStart = (e: React.DragEvent, index: number, isWaitingList = false, stationId?: string) => { 
-      if (isLinking) {
-          e.preventDefault();
-          return;
-      }
-
-      if (isWaitingList && stationId) {
-          e.dataTransfer.setData("stationId", stationId);
-          e.dataTransfer.effectAllowed = "copy";
-      } else if (!canEdit || !isManualMode) {
-          return; 
-      } else {
-          setDraggedStationIdx(index); 
-          e.dataTransfer.effectAllowed = "move"; 
-      }
-      setEditModal(null); 
-  };
-  
+  const handleDragStart = (e: React.DragEvent, index: number, isWaitingList = false, stationId?: string) => { if (isLinking) { e.preventDefault(); return; } if (isWaitingList && stationId) { e.dataTransfer.setData("stationId", stationId); e.dataTransfer.effectAllowed = "copy"; } else if (!canEdit || !isManualMode) { return; } else { setDraggedStationIdx(index); e.dataTransfer.effectAllowed = "move"; } setEditModal(null); };
   const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); };
-  
-  const handleDrop = (e: React.DragEvent, targetPosteIdx: number) => { 
-      e.preventDefault(); 
-      e.stopPropagation(); 
-      
-      if (isLinking) return; 
-
-      const droppedStationId = e.dataTransfer.getData("stationId"); 
-      
-      if (isManualMode && setPostes && postes) {
-          let newPostes = [...postes];
-          const targetItem = newPostes[targetPosteIdx];
-          if (!targetItem) return;
-
-          if (droppedStationId) {
-              const waitingStationIdx = newPostes.findIndex(p => p.id === droppedStationId);
-              if (waitingStationIdx === -1) return;
-              
-              const stationToPlace = { ...newPostes[waitingStationIdx], isPlaced: true };
-              newPostes.splice(waitingStationIdx, 1);
-              
-              let adjustedTargetIdx = targetPosteIdx;
-              if (waitingStationIdx < targetPosteIdx) {
-                  adjustedTargetIdx--;
-              }
-
-              if (isMagnetic) {
-                  newPostes.splice(adjustedTargetIdx, 0, stationToPlace);
-              } else {
-                  const currentTarget = newPostes[adjustedTargetIdx];
-                  if (currentTarget && currentTarget.machine === 'VIDE') {
-                      newPostes[adjustedTargetIdx] = stationToPlace;
-                  } else {
-                      newPostes.splice(adjustedTargetIdx, 0, stationToPlace);
-                  }
-              }
-
-          } else if (draggedStationIdx !== null && draggedStationIdx !== undefined) {
-              const sourceRealIdx = draggedStationIdx;
-              if (sourceRealIdx === -1 || sourceRealIdx >= newPostes.length) return;
-              if (sourceRealIdx === targetPosteIdx) {
-                  setDraggedStationIdx(null);
-                  return;
-              }
-              
-              const sourceItem = newPostes[sourceRealIdx];
-              const targetSlotItem = newPostes[targetPosteIdx];
-              
-              if (!sourceItem || !targetSlotItem) return;
-
-              if (isMagnetic) {
-                  newPostes.splice(sourceRealIdx, 1);
-                  let finalTargetIdx = targetPosteIdx;
-                  if (sourceRealIdx < targetPosteIdx) finalTargetIdx--;
-                  newPostes.splice(finalTargetIdx, 0, sourceItem);
-              } else {
-                  newPostes[targetPosteIdx] = sourceItem;
-                  newPostes[sourceRealIdx] = targetSlotItem;
-              }
-          }
-          
-          setPostes(newPostes);
-          setDraggedStationIdx(null);
-      }
-  };
+  const handleDrop = (e: React.DragEvent, targetPosteIdx: number) => { e.preventDefault(); e.stopPropagation(); if (isLinking) return; const droppedStationId = e.dataTransfer.getData("stationId"); if (isManualMode && setPostes && postes) { let newPostes = [...postes]; const targetItem = newPostes[targetPosteIdx]; if (!targetItem) return; if (droppedStationId) { const waitingStationIdx = newPostes.findIndex(p => p.id === droppedStationId); if (waitingStationIdx === -1) return; const stationToPlace = { ...newPostes[waitingStationIdx], isPlaced: true }; newPostes.splice(waitingStationIdx, 1); let adjustedTargetIdx = targetPosteIdx; if (waitingStationIdx < targetPosteIdx) { adjustedTargetIdx--; } if (isMagnetic) { newPostes.splice(adjustedTargetIdx, 0, stationToPlace); } else { const currentTarget = newPostes[adjustedTargetIdx]; if (currentTarget && currentTarget.machine === 'VIDE') { newPostes[adjustedTargetIdx] = stationToPlace; } else { newPostes.splice(adjustedTargetIdx, 0, stationToPlace); } } } else if (draggedStationIdx !== null && draggedStationIdx !== undefined) { const sourceRealIdx = draggedStationIdx; if (sourceRealIdx === -1 || sourceRealIdx >= newPostes.length) return; if (sourceRealIdx === targetPosteIdx) { setDraggedStationIdx(null); return; } const sourceItem = newPostes[sourceRealIdx]; const targetSlotItem = newPostes[targetPosteIdx]; if (!sourceItem || !targetSlotItem) return; if (isMagnetic) { newPostes.splice(sourceRealIdx, 1); let finalTargetIdx = targetPosteIdx; if (sourceRealIdx < targetPosteIdx) finalTargetIdx--; newPostes.splice(finalTargetIdx, 0, sourceItem); } else { newPostes[targetPosteIdx] = sourceItem; newPostes[sourceRealIdx] = targetSlotItem; } } setPostes(newPostes); setDraggedStationIdx(null); } };
 
   const handleAddPost = () => { if (!setPostes || !postes) return; const newId = `P${postes.length + 1}`; const newPoste: Poste = { id: newId, name: newId, machine: selectedMachineToAdd, notes: '', operatorName: '', isPlaced: isManualMode }; setPostes([...postes, newPoste]); };
   const reorderPostes = (list: Poste[], isSwapped: boolean) => { const isControl = (p: Poste) => { const m = p.machine.toUpperCase(); return m.includes('CONTROLE') || m.includes('CONTROL'); }; const isFinition = (p: Poste) => { const m = p.machine.toUpperCase(); return m.includes('FINITION'); }; const control = list.filter(isControl); const finition = list.filter(isFinition); const others = list.filter(p => !isControl(p) && !isFinition(p)); const newOrder = isSwapped ? [...others, ...control, ...finition] : [...others, ...finition, ...control]; return newOrder.map((p, i) => ({ ...p, name: `P${i+1}` })); };
@@ -1419,346 +1112,29 @@ export default function Implantation({
   const handleAddSpecial = (type: 'CONTROLE' | 'FINITION') => { if (!setPostes || !postes) return; const newPoste: Poste = { id: `P_${Date.now()}`, name: 'P?', machine: type, notes: '', operatorName: '', isPlaced: isManualMode }; const newList = [...postes, newPoste]; setPostes(reorderPostes(newList, swapControlFinition)); };
   const handleRemoveSpecial = (type: 'CONTROLE' | 'FINITION') => { if (!setPostes || !postes) return; const reversedPostes = [...postes].reverse(); const indexToRemoveReversed = reversedPostes.findIndex(p => { const m = p.machine.toUpperCase(); if (type === 'CONTROLE') return m.includes('CONTROLE') || m.includes('CONTROL'); if (type === 'FINITION') return m.includes('FINITION'); return false; }); if (indexToRemoveReversed !== -1) { const realIndex = postes.length - 1 - indexToRemoveReversed; const newPostes = [...postes]; newPostes.splice(realIndex, 1); setPostes(reorderPostes(newPostes, swapControlFinition)); } };
   
-  const handleContextMenu = (e: React.MouseEvent, station: Workstation) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setContextMenu({
-          visible: true,
-          x: e.pageX,
-          y: e.pageY,
-          station: station
-      });
-  };
-
-  const handleContextAction = (action: string) => {
-      if (!contextMenu?.station || !setPostes || !postes) return;
-      const currentStation = contextMenu.station;
-      const currentIndex = postes.findIndex(p => p.id === currentStation.id.split('__')[0]);
-
-      if (currentIndex === -1) return;
-
-      switch(action) {
-          case 'modify':
-              handleOpenEditModal(null, currentStation); 
-              break;
-          case 'swap':
-              setSwapSourceId(currentStation.id);
-              break;
-          case 'rotate':
-              if (layoutType === 'free') {
-                  rotateStation(currentStation.id);
-              }
-              break;
-          case 'shape_circle':
-              if (layoutType === 'free') {
-                  changeStationShape(currentStation.id, 'circle');
-              }
-              break;
-          case 'shape_rect':
-              if (layoutType === 'free') {
-                  changeStationShape(currentStation.id, 'rect');
-              }
-              break;
-          case 'insert':
-              const nextColorIndex = postes.length % POSTE_COLORS.length;
-              const assignedColorName = POSTE_COLORS[nextColorIndex].name;
-              
-              const newPoste: Poste = { 
-                  id: `P_${Date.now()}`, 
-                  name: 'P?', 
-                  machine: 'MAN', 
-                  notes: '', 
-                  operatorName: '', 
-                  isPlaced: isManualMode,
-                  colorName: assignedColorName 
-              };
-              const newPostesInsert = [...postes];
-              newPostesInsert.splice(currentIndex + 1, 0, newPoste);
-              setPostes(newPostesInsert.map((p, i) => ({ ...p, name: `P${i + 1}` })));
-              break;
-          case 'delete':
-              if (isManualMode) {
-                  handleRemoveFromCanvas(currentStation.id.split('__')[0]);
-              } else {
-                  const newPostesDel = [...postes];
-                  newPostesDel.splice(currentIndex, 1);
-                  setPostes(newPostesDel.map((p, i) => ({ ...p, name: `P${i + 1}` })));
-              }
-              break;
-      }
-      setContextMenu(null);
-  };
-
-  const handleStationClick = (targetStation: Workstation) => {
-      // In Free Mode, clicking is handled by MouseDown for dragging.
-      // We check if it was a drag or a click in the mouseUp handler if needed,
-      // but for linking/swapping, simple click is fine.
-      // We'll prioritize Linking over Dragging if linking is active.
-      
-      if (isLinking) {
-          handleLinkClick(targetStation.id);
-          return;
-      }
-
-      if (swapSourceId && setPostes && postes) {
-          if (swapSourceId === targetStation.id) {
-              setSwapSourceId(null); 
-              return;
-          }
-
-          const sourceBaseId = swapSourceId.split('__')[0];
-          const targetBaseId = targetStation.id.split('__')[0];
-          
-          const sourceIndex = postes.findIndex(p => p.id === sourceBaseId);
-          const targetIndex = postes.findIndex(p => p.id === targetBaseId);
-
-          if (sourceIndex !== -1 && targetIndex !== -1) {
-              const newPostes = [...postes];
-              const sourceItem = newPostes[sourceIndex];
-              const targetItem = newPostes[targetIndex];
-              
-              newPostes[sourceIndex] = targetItem;
-              newPostes[targetIndex] = sourceItem;
-              
-              const reindexed = newPostes.map((p, i) => ({ ...p, name: `P${i + 1}` }));
-              setPostes(reindexed);
-          }
-          setSwapSourceId(null);
-      }
-  };
-
-  const handleOpenEditModal = (e: React.MouseEvent | null, station: Workstation) => { 
-      if (e) {
-          e.preventDefault(); 
-          e.stopPropagation();
-      }
-      if (!canEdit) return; 
-      
-      const realIdx = postes!.findIndex(p => p.id === station.id.split('__')[0]);
-      if (realIdx === -1) return;
-
-      setShowDeleteConfirm(false); 
-
-      setEditModal({
-          isOpen: true,
-          stationIndex: realIdx,
-          data: { ...postes![realIdx] },
-          color: station.color,
-          operators: station.operators
-      });
-  };
-
-  const closeEditModal = () => {
-      setEditModal(null);
-      setShowDeleteConfirm(false);
-  };
+  const handleContextMenu = (e: React.MouseEvent, station: Workstation) => { e.preventDefault(); e.stopPropagation(); setContextMenu({ visible: true, x: e.pageX, y: e.pageY, station: station }); };
+  const handleContextAction = (action: string) => { if (!contextMenu?.station || !setPostes || !postes) return; const currentStation = contextMenu.station; const currentIndex = postes.findIndex(p => p.id === currentStation.id.split('__')[0]); if (currentIndex === -1) return; switch(action) { case 'modify': handleOpenEditModal(null, currentStation); break; case 'swap': setSwapSourceId(currentStation.id); break; case 'rotate': if (layoutType === 'free') { rotateStation(currentStation.id); } break; case 'shape_circle': if (layoutType === 'free') { changeStationShape(currentStation.id, 'circle'); } break; case 'shape_rect': if (layoutType === 'free') { changeStationShape(currentStation.id, 'rect'); } break; case 'insert': const nextColorIndex = postes.length % POSTE_COLORS.length; const assignedColorName = POSTE_COLORS[nextColorIndex].name; const newPoste: Poste = { id: `P_${Date.now()}`, name: 'P?', machine: 'MAN', notes: '', operatorName: '', isPlaced: isManualMode, colorName: assignedColorName }; const newPostesInsert = [...postes]; newPostesInsert.splice(currentIndex + 1, 0, newPoste); setPostes(newPostesInsert.map((p, i) => ({ ...p, name: `P${i + 1}` }))); break; case 'delete': if (isManualMode) { handleRemoveFromCanvas(currentStation.id.split('__')[0]); } else { const newPostesDel = [...postes]; newPostesDel.splice(currentIndex, 1); setPostes(newPostesDel.map((p, i) => ({ ...p, name: `P${i + 1}` }))); } break; } setContextMenu(null); };
   
-  const saveStationMetadata = (updatedData: Partial<Poste>) => { 
-      if (!setPostes || !postes || !editModal) return; 
-      
-      setEditModal(prev => prev ? ({ ...prev, data: { ...prev.data, ...updatedData } }) : null);
-      
-      const newPostes = [...postes]; 
-      newPostes[editModal.stationIndex] = { ...newPostes[editModal.stationIndex], ...updatedData }; 
-      setPostes(newPostes); 
-  };
-
-  const deleteFromModal = () => { 
-      if (!setPostes || !postes || !editModal) return; 
-      const newPostes = [...postes]; 
-      newPostes.splice(editModal.stationIndex, 1); 
-      const reindexed = newPostes.map((p, i) => ({ ...p, name: `P${i + 1}` })); 
-      setPostes(reindexed); 
-      closeEditModal(); 
-  };
-
-  const modalOps = useMemo(() => {
-      if (!editModal || !assignments) return [];
-      const stationId = editModal.data.id;
-      const parentId = editModal.data.originalId;
-      
-      return operations.filter(op => {
-          const assignedTo = assignments[op.id] || [];
-          return assignedTo.includes(stationId) || (parentId && assignedTo.includes(parentId));
-      }).sort((a, b) => a.order - b.order);
-  }, [editModal, operations, assignments]);
+  const handleStationClick = (targetStation: Workstation) => { if (isLinking) { handleLinkClick(targetStation.id); return; } if (swapSourceId && setPostes && postes) { if (swapSourceId === targetStation.id) { setSwapSourceId(null); return; } const sourceBaseId = swapSourceId.split('__')[0]; const targetBaseId = targetStation.id.split('__')[0]; const sourceIndex = postes.findIndex(p => p.id === sourceBaseId); const targetIndex = postes.findIndex(p => p.id === targetBaseId); if (sourceIndex !== -1 && targetIndex !== -1) { const newPostes = [...postes]; const sourceItem = newPostes[sourceIndex]; const targetItem = newPostes[targetIndex]; newPostes[sourceIndex] = targetItem; newPostes[targetIndex] = sourceItem; const reindexed = newPostes.map((p, i) => ({ ...p, name: `P${i + 1}` })); setPostes(reindexed); } setSwapSourceId(null); } };
+  const handleOpenEditModal = (e: React.MouseEvent | null, station: Workstation) => { if (e) { e.preventDefault(); e.stopPropagation(); } if (!canEdit) return; const realIdx = postes!.findIndex(p => p.id === station.id.split('__')[0]); if (realIdx === -1) return; setShowDeleteConfirm(false); setEditModal({ isOpen: true, stationIndex: realIdx, data: { ...postes![realIdx] }, color: station.color, operators: station.operators }); };
+  const closeEditModal = () => { setEditModal(null); setShowDeleteConfirm(false); };
+  const saveStationMetadata = (updatedData: Partial<Poste>) => { if (!setPostes || !postes || !editModal) return; setEditModal(prev => prev ? ({ ...prev, data: { ...prev.data, ...updatedData } }) : null); const newPostes = [...postes]; newPostes[editModal.stationIndex] = { ...newPostes[editModal.stationIndex], ...updatedData }; setPostes(newPostes); };
+  const deleteFromModal = () => { if (!setPostes || !postes || !editModal) return; const newPostes = [...postes]; newPostes.splice(editModal.stationIndex, 1); const reindexed = newPostes.map((p, i) => ({ ...p, name: `P${i + 1}` })); setPostes(reindexed); closeEditModal(); };
+  const modalOps = useMemo(() => { if (!editModal || !assignments) return []; const stationId = editModal.data.id; const parentId = editModal.data.originalId; return operations.filter(op => { const assignedTo = assignments[op.id] || []; return assignedTo.includes(stationId) || (parentId && assignedTo.includes(parentId)); }).sort((a, b) => a.order - b.order); }, [editModal, operations, assignments]);
 
   const StationCard: React.FC<{ station: Workstation; isGrid?: boolean; isMini?: boolean }> = ({ station, isGrid = false, isMini = false }) => {
-      const color = station.color; 
-      const isVide = station.machine === 'VIDE';
-      const timeInSeconds = Math.round(station.totalTime * 60); 
-      const hasNotes = station.notes && station.notes.trim().length > 0; 
-      const hasOperator = station.operatorName && station.operatorName.trim().length > 0; 
-      const isOverridden = station.timeOverride !== undefined; 
-      const mySimIndex = station.index - 1; 
-      const isActive = !isMini && simStep === mySimIndex; 
-      const isPassed = simStep > mySimIndex; 
-      
-      const isControl = station.machine.toUpperCase().includes('CONTROLE'); 
-      const isFer = station.machine.toUpperCase().includes('FER') || station.machine.toUpperCase().includes('REPASSAGE'); 
-      const isFinition = station.machine.toUpperCase().includes('FINITION'); 
-      
-      const isBroken = station.notes?.includes('#PANNE');
-
-      let bodyBgClass = 'bg-white'; 
-      if (isControl) bodyBgClass = 'bg-orange-50'; 
-      if (isFer) bodyBgClass = 'bg-rose-50'; 
-      if (isFinition) bodyBgClass = 'bg-purple-50'; 
-      const isSpecial = isControl || isFer || isFinition;
-
-      const isFeeder = station.isFeeder;
-      if (isFeeder) bodyBgClass = 'bg-blue-50/50';
-
-      const isSwapSource = swapSourceId === station.id;
-      const isSwapTarget = swapSourceId && swapSourceId !== station.id;
-      
-      const isLinkSource = linkSource === station.id;
-      const isLinkTargetCandidate = isLinking && linkSource && linkSource !== station.id;
-
-      const cardHeightClass = isGrid ? 'min-h-[140px]' : (isMini ? 'min-h-[80px]' : 'h-full min-h-[140px]');
-      const cardWidthClass = isMini ? 'w-full' : (isGrid ? 'w-full' : 'w-44 sm:w-48 shrink-0'); 
-
-      const miniCardStyle = isMini ? `${color.bg} ${color.border} border-2` : `bg-white border-2`;
-
-      const cursorClass = (canEdit && isManualMode && !swapSourceId && !isLinking) ? 'cursor-move' : 'cursor-default';
-
-      if (isVide && !isMini) {
-          return (
-            <div 
-                id={`station-card-${station.id}`} 
-                onDragOver={handleDragOver} 
-                onDrop={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    handleDrop(e, station.originalIndex);
-                }}
-                className={`relative rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 flex flex-col items-center justify-center gap-2 group z-10 transition-all ${cardWidthClass} ${cardHeightClass} ${isManualMode ? 'hover:bg-indigo-50 hover:border-indigo-300' : ''}`}
-            >
-                <div className="text-[10px] font-bold text-slate-400 uppercase">Emplacement Vide</div>
-                {isManualMode && <div className="absolute inset-0 bg-transparent cursor-pointer" title="Déposez un poste ici"></div>}
-            </div>
-          );
-      }
-
-      return (
-          <div 
-            id={`station-card-${station.id}`} 
-            onClick={() => handleStationClick(station)}
-            onContextMenu={(e) => {
-                handleContextMenu(e, station);
-            }}
-            onDoubleClick={(e) => handleOpenEditModal(e, station)}
-            draggable={canEdit && isManualMode && !swapSourceId && !isLinking && layoutType !== 'free'} 
-            onDragStart={(e) => handleDragStart(e, station.originalIndex, isMini, station.id)} 
-            onDragEnd={() => setDraggedStationIdx(null)}
-            onDragOver={handleDragOver} 
-            onDrop={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                handleDrop(e, station.originalIndex);
-            }} 
-            className={`relative rounded-xl overflow-hidden group z-10 shadow-sm
-                ${cardWidthClass} ${cardHeightClass} 
-                ${canEdit && isManualMode && !isLinking && layoutType !== 'free' ? 'hover:-translate-y-1 hover:shadow-lg' : ''} 
-                ${cursorClass}
-                ${isActive ? 'ring-4 ring-emerald-400 border-emerald-500 scale-105 shadow-xl z-20' : 
-                  isLinkSource ? 'ring-4 ring-indigo-500 border-indigo-600 scale-105 shadow-xl z-30 animate-pulse' :
-                  isLinkTargetCandidate ? 'cursor-pointer hover:ring-4 hover:ring-indigo-300 hover:border-indigo-400' :
-                  isSwapSource ? 'ring-4 ring-indigo-500 border-indigo-600 scale-105 shadow-xl z-30' :
-                  isSwapTarget ? 'cursor-pointer hover:ring-4 hover:ring-indigo-300 hover:border-indigo-400' :
-                  isPassed ? 'border-emerald-200 opacity-90' : (isMini ? color.border : color.border)} 
-                ${isBroken ? 'ring-2 ring-rose-500 border-rose-600 bg-rose-50' : ''}
-                ${miniCardStyle}
-                transition-all duration-300 flex flex-col select-none`}
-          >
-              <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${isActive ? 'bg-emerald-500' : (isBroken ? 'bg-rose-500' : color.fill)}`}></div>
-
-              <div className={`px-2 pl-3 py-1.5 flex justify-between items-center ${isActive ? 'bg-emerald-500' : (isPassed ? 'bg-emerald-50' : (isMini ? color.bg : color.bg))} border-b ${isActive ? 'border-emerald-600' : color.border} transition-colors duration-500 relative`}>
-                  {isOverridden && <div className="absolute top-1 right-1 w-2 h-2 rounded-full bg-purple-500 ring-1 ring-white animate-pulse" title="Temps Forcé"></div>}
-                  {isBroken && <div className="absolute top-1 right-3 w-3 h-3 text-rose-600 animate-pulse"><AlertTriangle className="w-3 h-3 fill-current" /></div>}
-                  
-                  <div className="flex items-center gap-1.5">
-                      <span className={`text-[10px] font-black ${isActive ? 'text-emerald-600 bg-white' : color.text} w-5 h-5 flex items-center justify-center bg-white rounded-md shadow-sm border border-black/5`}>
-                          {station.name.replace('P','').split('.')[0]}
-                      </span>
-                      <span className={`text-[9px] font-black uppercase truncate max-w-[80px] ${isActive ? 'text-white' : color.text}`} title={station.name}>
-                          {station.machine}
-                      </span>
-                  </div>
-                  {!isMini && (
-                      <div className="flex items-center gap-0.5">
-                          {isFeeder && <div title={`Alimente: ${station.targetStationName || 'Poste Suivant'}`}><GitMerge className={`w-3 h-3 ${isActive ? 'text-white' : 'text-blue-500'}`} /></div>}
-                          {hasOperator && <div title={station.operatorName}><User className={`w-3 h-3 ${isActive ? 'text-white' : 'text-slate-400'}`} /></div>}
-                          {hasNotes && <div title="Notes"><FileText className={`w-3 h-3 ${isActive ? 'text-yellow-300' : 'text-amber-400'}`} /></div>}
-                      </div>
-                  )}
-              </div>
-
-              <div className={`p-2 pl-3 flex-1 flex flex-col justify-between gap-1 ${isMini ? 'bg-white' : bodyBgClass}`}>
-                  
-                  {station.groups && station.groups.length > 0 && !isMini && (
-                      <div className="flex flex-wrap gap-1 mb-1">
-                          {station.groups.slice(0, 2).map(grp => (
-                              <span key={grp} className="text-[7px] font-black uppercase text-indigo-600 bg-indigo-100 px-1 py-0.5 rounded border border-indigo-200 truncate max-w-full">
-                                  {grp}
-                              </span>
-                          ))}
-                          {station.groups.length > 2 && <span className="text-[7px] text-slate-400">+{station.groups.length - 2}</span>}
-                      </div>
-                  )}
-
-                  <div className="space-y-1">
-                      {station.operations.length > 0 ? (
-                          <>
-                              {station.operations.slice(0, isMini ? 100 : 3).map((op, i) => {
-                                  const groupStyle = op.groupId ? getGroupStyle(op.groupId) : null;
-                                  return (
-                                  <div key={i} className={`flex justify-between items-center gap-1.5 py-0.5 ${groupStyle && isMini ? groupStyle.bg + ' px-1.5 rounded-md -mx-1.5 my-0.5 border border-transparent hover:border-indigo-200' : ''}`}>
-                                      <span className={`font-mono text-[9px] font-bold px-1 rounded border shrink-0 ${groupStyle && isMini ? 'bg-white/50 border-transparent ' + groupStyle.text : 'bg-slate-50 text-slate-400 border-slate-100'}`}>
-                                          {op.order}
-                                      </span>
-                                      <div className={`text-[9px] font-bold leading-tight line-clamp-2 flex-1 ${groupStyle && isMini ? groupStyle.text : 'text-slate-600'}`} title={op.description}>
-                                          {op.description}
-                                      </div>
-                                      {groupStyle && isMini && <LinkIcon className={`w-2.5 h-2.5 shrink-0 ${groupStyle.text}`} />}
-                                  </div>
-                              )})}
-                              {station.operations.length > (isMini ? 100 : 3) && <div className="text-[8px] text-slate-400 italic font-medium">... +{station.operations.length - (isMini ? 100 : 3)}</div>}
-                          </>
-                      ) : (
-                          <div className={`text-[9px] italic flex items-center justify-center ${isMini ? 'h-8' : 'h-12'} ${isOverridden ? 'text-purple-500 font-bold' : (isSpecial ? 'text-slate-400/70' : 'text-slate-300')}`}>
-                              {isOverridden ? 'Temps Forcé' : 'Vide'}
-                          </div>
-                      )}
-                  </div>
-
-                  <div className="flex items-center justify-between mt-auto pt-1.5 border-t border-slate-100">
-                      <div className="flex flex-col">
-                          <span className="text-[7px] font-bold text-slate-400 uppercase tracking-wider">Total</span>
-                          <span className={`text-sm font-bold ${isActive ? 'text-emerald-600' : (isOverridden ? 'text-purple-600' : color.text)}`}>{timeInSeconds}s</span>
-                      </div>
-                      <div className="flex flex-col items-end">
-                          <span className="text-[7px] font-bold text-slate-400 uppercase tracking-wider">Sat.</span>
-                          <div className="flex items-center gap-1">
-                              {station.operators > 1 && <span className={`text-[9px] font-black px-1 rounded bg-amber-100 text-amber-700`}>x{station.operators}</span>}
-                              <span className={`text-[9px] font-black ${station.saturation > 100 ? 'text-rose-500' : 'text-emerald-500'}`}>{Math.round(station.saturation)}%</span>
-                          </div>
-                      </div>
-                  </div>
-              </div>
-
-              <div className="absolute bottom-0 left-0 h-1 bg-slate-200 w-full">
-                  <div className={`h-full ${isActive ? 'bg-emerald-400' : (isFer ? 'bg-rose-500' : (isControl ? 'bg-orange-500' : (isFinition ? 'bg-purple-500' : color.fill)))}`} style={{ width: `${Math.min(station.saturation, 100)}%` }}></div>
-              </div>
-          </div>
-      );
-  };
+      const color = station.color; const isVide = station.machine === 'VIDE'; const timeInSeconds = Math.round(station.totalTime * 60); const hasNotes = station.notes && station.notes.trim().length > 0; const hasOperator = station.operatorName && station.operatorName.trim().length > 0; const isOverridden = station.timeOverride !== undefined; const mySimIndex = station.index - 1; const isActive = !isMini && simStep === mySimIndex; const isPassed = simStep > mySimIndex; const isControl = station.machine.toUpperCase().includes('CONTROLE'); const isFer = station.machine.toUpperCase().includes('FER') || station.machine.toUpperCase().includes('REPASSAGE'); const isFinition = station.machine.toUpperCase().includes('FINITION'); const isBroken = station.notes?.includes('#PANNE');
+      let bodyBgClass = 'bg-white'; if (isControl) bodyBgClass = 'bg-orange-50'; if (isFer) bodyBgClass = 'bg-rose-50'; if (isFinition) bodyBgClass = 'bg-purple-50'; const isSpecial = isControl || isFer || isFinition;
+      const isFeeder = station.isFeeder; if (isFeeder) bodyBgClass = 'bg-blue-50/50';
+      const isSwapSource = swapSourceId === station.id; const isSwapTarget = swapSourceId && swapSourceId !== station.id; const isLinkSource = linkSource === station.id; const isLinkTargetCandidate = isLinking && linkSource && linkSource !== station.id;
+      const cardHeightClass = isGrid ? 'min-h-[140px]' : (isMini ? 'min-h-[80px]' : 'h-full min-h-[140px]'); const cardWidthClass = isMini ? 'w-full' : (isGrid ? 'w-full' : 'w-44 sm:w-48 shrink-0'); const miniCardStyle = isMini ? `${color.bg} ${color.border} border-2` : `bg-white border-2`; const cursorClass = (canEdit && isManualMode && !swapSourceId && !isLinking) ? 'cursor-move' : 'cursor-default';
+      if (isVide && !isMini) { return ( <div id={`station-card-${station.id}`} onDragOver={handleDragOver} onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDrop(e, station.originalIndex); }} className={`relative rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 flex flex-col items-center justify-center gap-2 group z-10 transition-all ${cardWidthClass} ${cardHeightClass} ${isManualMode ? 'hover:bg-indigo-50 hover:border-indigo-300' : ''}`} > <div className="text-[10px] font-bold text-slate-400 uppercase">Emplacement Vide</div> {isManualMode && <div className="absolute inset-0 bg-transparent cursor-pointer" title="Déposez un poste ici"></div>} </div> ); }
+      return ( <div id={`station-card-${station.id}`} onClick={() => handleStationClick(station)} onContextMenu={(e) => { handleContextMenu(e, station); }} onDoubleClick={(e) => handleOpenEditModal(e, station)} draggable={canEdit && isManualMode && !swapSourceId && !isLinking && layoutType !== 'free'} onDragStart={(e) => handleDragStart(e, station.originalIndex, isMini, station.id)} onDragEnd={() => setDraggedStationIdx(null)} onDragOver={handleDragOver} onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDrop(e, station.originalIndex); }} className={`relative rounded-xl overflow-hidden group z-10 shadow-sm ${cardWidthClass} ${cardHeightClass} ${canEdit && isManualMode && !isLinking && layoutType !== 'free' ? 'hover:-translate-y-1 hover:shadow-lg' : ''} ${cursorClass} ${isActive ? 'ring-4 ring-emerald-400 border-emerald-500 scale-105 shadow-xl z-20' : isLinkSource ? 'ring-4 ring-indigo-500 border-indigo-600 scale-105 shadow-xl z-30 animate-pulse' : isLinkTargetCandidate ? 'cursor-pointer hover:ring-4 hover:ring-indigo-300 hover:border-indigo-400' : isSwapSource ? 'ring-4 ring-indigo-500 border-indigo-600 scale-105 shadow-xl z-30' : isSwapTarget ? 'cursor-pointer hover:ring-4 hover:ring-indigo-300 hover:border-indigo-400' : isPassed ? 'border-emerald-200 opacity-90' : (isMini ? color.border : color.border)} ${isBroken ? 'ring-2 ring-rose-500 border-rose-600 bg-rose-50' : ''} ${miniCardStyle} transition-all duration-300 flex flex-col select-none`} > <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${isActive ? 'bg-emerald-500' : (isBroken ? 'bg-rose-500' : color.fill)}`}></div> <div className={`px-2 pl-3 py-1.5 flex justify-between items-center ${isActive ? 'bg-emerald-500' : (isPassed ? 'bg-emerald-50' : (isMini ? color.bg : color.bg))} border-b ${isActive ? 'border-emerald-600' : color.border} transition-colors duration-500 relative`}> {isOverridden && <div className="absolute top-1 right-1 w-2 h-2 rounded-full bg-purple-500 ring-1 ring-white animate-pulse" title="Temps Forcé"></div>} {isBroken && <div className="absolute top-1 right-3 w-3 h-3 text-rose-600 animate-pulse"><AlertTriangle className="w-3 h-3 fill-current" /></div>} <div className="flex items-center gap-1.5"> <span className={`text-[10px] font-black ${isActive ? 'text-emerald-600 bg-white' : color.text} w-5 h-5 flex items-center justify-center bg-white rounded-md shadow-sm border border-black/5`}> {station.name.replace('P','').split('.')[0]} </span> <span className={`text-[9px] font-black uppercase truncate max-w-[80px] ${isActive ? 'text-white' : color.text}`} title={station.name}> {station.machine} </span> </div> {!isMini && ( <div className="flex items-center gap-0.5"> {isFeeder && <div title={`Alimente: ${station.targetStationName || 'Poste Suivant'}`}><GitMerge className={`w-3 h-3 ${isActive ? 'text-white' : 'text-blue-500'}`} /></div>} {hasOperator && <div title={station.operatorName}><User className={`w-3 h-3 ${isActive ? 'text-white' : 'text-slate-400'}`} /></div>} {hasNotes && <div title="Notes"><FileText className={`w-3 h-3 ${isActive ? 'text-yellow-300' : 'text-amber-400'}`} /></div>} </div> )} </div> <div className={`p-2 pl-3 flex-1 flex flex-col justify-between gap-1 ${isMini ? 'bg-white' : bodyBgClass}`}> {station.groups && station.groups.length > 0 && !isMini && ( <div className="flex flex-wrap gap-1 mb-1"> {station.groups.slice(0, 2).map(grp => ( <span key={grp} className="text-[7px] font-black uppercase text-indigo-600 bg-indigo-100 px-1 py-0.5 rounded border border-indigo-200 truncate max-w-full"> {grp} </span> ))} {station.groups.length > 2 && <span className="text-[7px] text-slate-400">+{station.groups.length - 2}</span>} </div> )} <div className="space-y-1"> {station.operations.length > 0 ? ( <> {station.operations.slice(0, isMini ? 100 : 3).map((op, i) => { const groupStyle = op.groupId ? getGroupStyle(op.groupId) : null; return ( <div key={i} className={`flex justify-between items-center gap-1.5 py-0.5 ${groupStyle && isMini ? groupStyle.bg + ' px-1.5 rounded-md -mx-1.5 my-0.5 border border-transparent hover:border-indigo-200' : ''}`}> <span className={`font-mono text-[9px] font-bold px-1 rounded border shrink-0 ${groupStyle && isMini ? 'bg-white/50 border-transparent ' + groupStyle.text : 'bg-slate-50 text-slate-400 border-slate-100'}`}> {op.order} </span> <div className={`text-[9px] font-bold leading-tight line-clamp-2 flex-1 ${groupStyle && isMini ? groupStyle.text : 'text-slate-600'}`} title={op.description}> {op.description} </div> {groupStyle && isMini && <LinkIcon className={`w-2.5 h-2.5 shrink-0 ${groupStyle.text}`} />} </div> )})} {station.operations.length > (isMini ? 100 : 3) && <div className="text-[8px] text-slate-400 italic font-medium">... +{station.operations.length - (isMini ? 100 : 3)}</div>} </> ) : ( <div className={`text-[9px] italic flex items-center justify-center ${isMini ? 'h-8' : 'h-12'} ${isOverridden ? 'text-purple-500 font-bold' : (isSpecial ? 'text-slate-400/70' : 'text-slate-300')}`}> {isOverridden ? 'Temps Forcé' : 'Vide'} </div> )} </div> <div className="flex items-center justify-between mt-auto pt-1.5 border-t border-slate-100"> <div className="flex flex-col"> <span className="text-[7px] font-bold text-slate-400 uppercase tracking-wider">Total</span> <span className={`text-sm font-bold ${isActive ? 'text-emerald-600' : (isOverridden ? 'text-purple-600' : color.text)}`}>{timeInSeconds}s</span> </div> <div className="flex flex-col items-end"> <span className="text-[7px] font-bold text-slate-400 uppercase tracking-wider">Sat.</span> <div className="flex items-center gap-1"> {station.operators > 1 && <span className={`text-[9px] font-black px-1 rounded bg-amber-100 text-amber-700`}>x{station.operators}</span>} <span className={`text-[9px] font-black ${station.saturation > 100 ? 'text-rose-500' : 'text-emerald-500'}`}>{Math.round(station.saturation)}%</span> </div> </div> </div> </div> <div className="absolute bottom-0 left-0 h-1 bg-slate-200 w-full"> <div className={`h-full ${isActive ? 'bg-emerald-400' : (isFer ? 'bg-rose-500' : (isControl ? 'bg-orange-500' : (isFinition ? 'bg-purple-500' : color.fill)))}`} style={{ width: `${Math.min(station.saturation, 100)}%` }}></div> </div> </div> ); };
 
   return (
     <div className="flex flex-col h-full gap-2 relative">
        {/* ... (Header) ... */}
        <div className="bg-white rounded-xl border border-slate-200 shadow-sm mb-2 p-2 flex flex-nowrap items-center gap-2 overflow-x-auto no-scrollbar shrink-0">
-            {/* ... (Header Stats) ... */}
             {/* OUVRIERS / HEURES */}
             <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 rounded-lg border border-slate-100 shrink-0">
                 <div className="flex flex-col items-center border-r border-slate-200 pr-3 mr-3">
@@ -1949,6 +1325,17 @@ export default function Implantation({
                     <button onClick={toggleFullScreen} className="p-1.5 rounded-lg border bg-white border-slate-200 text-slate-500 hover:text-indigo-600 transition-all" title="Plein Écran">
                         {isFullScreen ? <Minimize className="w-3.5 h-3.5" /> : <Maximize className="w-3.5 h-3.5" />}
                     </button>
+                    
+                    {/* EXPORT PLAN IMAGE BUTTON */}
+                    <button 
+                        onClick={handleExportPlan} 
+                        disabled={isExporting}
+                        className={`p-1.5 rounded-lg border bg-white border-slate-200 text-slate-500 hover:text-emerald-600 hover:border-emerald-200 transition-all ${isExporting ? 'opacity-50 cursor-not-allowed' : ''}`} 
+                        title="Exporter le plan (Image/PDF)"
+                    >
+                        {isExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageIcon className="w-3.5 h-3.5" />}
+                    </button>
+
                     <button onClick={() => window.print()} className="p-1.5 bg-slate-800 text-white rounded-lg hover:bg-slate-900 transition-colors shadow-sm" title="Imprimer"><Printer className="w-3.5 h-3.5" /></button>
                </div>
            </div>
@@ -1969,6 +1356,7 @@ export default function Implantation({
                </div>
            )}
 
+           {/* ... (Rest of existing Banners & Content - NO CHANGES NEEDED BELOW) ... */}
            {/* SWAP MODE BANNER */}
            {swapSourceId && !isLinking && (
                <div className="bg-orange-500 text-white px-4 py-2 text-xs font-bold flex items-center justify-between shadow-md mb-2 rounded-lg animate-in slide-in-from-top-2 z-20">
@@ -2168,7 +1556,7 @@ export default function Implantation({
                                </div>
                            )}
 
-                           {/* ... (Layout rendering logic: WHEAT, ZIGZAG, GRID) ... */}
+                           {/* ... (Layout rendering logic: WHEAT, ZIGZAG, GRID - UNCHANGED) ... */}
                            {layoutType === 'wheat' && (
                                <div className="flex flex-col gap-12 items-center pb-20 w-full min-w-max px-8 pt-8">
                                    {wheatGroups.map((group, idx) => {
@@ -2547,7 +1935,7 @@ export default function Implantation({
            document.body
        )}
 
-       {/* SAVE TEMPLATE MODAL */}
+       {/* ... (Existing Save/Load Template Modals - NO CHANGES NEEDED) ... */}
        {showSaveTemplateModal && (
            <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
                <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setShowSaveTemplateModal(false)} />
@@ -2569,7 +1957,6 @@ export default function Implantation({
            </div>
        )}
 
-       {/* LOAD TEMPLATE MODAL */}
        {showLoadTemplateModal && (
            <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
                <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setShowLoadTemplateModal(false)} />
