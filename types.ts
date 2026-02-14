@@ -93,11 +93,19 @@ export type Poste = {
   height?: number; // For resizing (future)
 };
 
+export type ManualLink = {
+  id: string;
+  from: string;
+  to: string;
+  label?: string;
+};
+
 export type SavedLayout = {
   id: string;
   name: string;
   date: string;
   postes: Poste[];
+  manualLinks?: ManualLink[];
 };
 
 export type FicheData = {

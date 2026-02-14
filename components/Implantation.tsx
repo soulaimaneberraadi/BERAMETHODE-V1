@@ -1,7 +1,7 @@
 
-import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Operation, Poste, Machine, ComplexityFactor, StandardTime, SavedLayout } from '../types';
+import { Operation, Poste, Machine, ComplexityFactor, StandardTime, SavedLayout, ManualLink } from '../types';
 import ExcelInput from './ExcelInput';
 import { 
   Zap, 
@@ -86,7 +86,8 @@ import {
   Square,
   FolderOpen,
   Image as ImageIcon,
-  Loader2
+  Loader2,
+  LogOut // Used for "Remove from Plan" icon
 } from 'lucide-react';
 
 // Declare html2pdf globally
@@ -115,18 +116,11 @@ interface ImplantationProps {
   fabricSettings: any;
   // Actions
   onSave?: () => void;
+  // Manual Links State (Passed from Parent for Persistence)
+  manualLinks?: ManualLink[];
+  setManualLinks?: React.Dispatch<React.SetStateAction<ManualLink[]>>;
 }
 
-// ... (Rest of imports and types unchanged)
-// --- LINK DATA TYPE ---
-type ManualLink = {
-    id: string;
-    from: string; // Poste ID
-    to: string;   // Poste ID
-    label?: string; // Optional Comment
-};
-
-// ... (COLOR PALETTE definitions unchanged) ...
 const GROUP_COLORS = [
   { bg: 'bg-indigo-50', border: 'border-indigo-500', text: 'text-indigo-700' },
   { bg: 'bg-orange-50', border: 'border-orange-500', text: 'text-orange-700' },
@@ -204,7 +198,6 @@ interface Workstation extends Poste {
   status?: 'ok' | 'panne';
 }
 
-// ... (Helper Components: DimensionMarker, SpecialZoneControl, LinkOverlay UNCHANGED) ...
 const DimensionMarkerHorizontal = ({ label }: { label: string }) => (
     <div className="flex flex-col items-center w-full px-2 opacity-70 scale-90">
         <div className="flex items-center w-full text-[8px] text-slate-500 font-mono font-bold whitespace-nowrap">
@@ -236,6 +229,59 @@ const SpecialZoneControl = ({ label, type, icon: Icon, color, currentCount, onAd
     </div>
 );
 
+// HELPER: Create Smooth SVG Path with Rounded Corners
+const getRoundedPath = (points: {x: number, y: number}[], radius: number = 12) => {
+    if (points.length < 2) return "";
+    let d = `M ${points[0].x} ${points[0].y}`;
+    
+    for (let i = 1; i < points.length - 1; i++) {
+        const p0 = points[i-1];
+        const p1 = points[i];
+        const p2 = points[i+1];
+        
+        // Vector p0 -> p1
+        const v1 = { x: p1.x - p0.x, y: p1.y - p0.y };
+        const len1 = Math.sqrt(v1.x*v1.x + v1.y*v1.y);
+        
+        // Vector p1 -> p2
+        const v2 = { x: p2.x - p1.x, y: p2.y - p1.y };
+        const len2 = Math.sqrt(v2.x*v2.x + v2.y*v2.y);
+        
+        // Clamp radius to prevent artifacts on short segments
+        const r = Math.min(radius, len1/2, len2/2);
+        
+        // Start of curve (backing up from p1 towards p0)
+        const start = {
+            x: p1.x - (v1.x / len1) * r,
+            y: p1.y - (v1.y / len1) * r
+        };
+        
+        // End of curve (moving from p1 towards p2)
+        const end = {
+            x: p1.x + (v2.x / len2) * r,
+            y: p1.y + (v2.y / len2) * r
+        };
+        
+        d += ` L ${start.x} ${start.y} Q ${p1.x} ${p1.y} ${end.x} ${end.y}`;
+    }
+    
+    // Final point
+    d += ` L ${points[points.length-1].x} ${points[points.length-1].y}`;
+    return d;
+};
+
+// DISTINCT PATH COLORS FOR BETTER VISIBILITY
+const PATH_COLORS = [
+    '#6366f1', // Indigo
+    '#f43f5e', // Rose
+    '#10b981', // Emerald
+    '#f59e0b', // Amber
+    '#8b5cf6', // Violet
+    '#06b6d4', // Cyan
+    '#d946ef', // Fuchsia
+    '#84cc16'  // Lime
+];
+
 const LinkOverlay = ({ 
     links, 
     stations, 
@@ -253,7 +299,7 @@ const LinkOverlay = ({
     onRemoveLink: (id: string) => void,
     onEditLabel: (id: string, currentLabel?: string) => void
 }) => {
-    const [paths, setPaths] = useState<{ id: string, path: string, labelX: number, labelY: number, label?: string }[]>([]);
+    const [paths, setPaths] = useState<{ id: string, path: string, labelX: number, labelY: number, label?: string, color: string, type: 'forward' | 'loop' | 'vertical' }[]>([]);
 
     const calculatePaths = useCallback(() => {
         if (!showLinks || !containerRef.current) {
@@ -261,10 +307,9 @@ const LinkOverlay = ({
             return;
         }
 
-        const container = containerRef.current;
-        const cRect = container.getBoundingClientRect();
-        
-        const newPaths = links.map(link => {
+        const containerRect = containerRef.current.getBoundingClientRect();
+
+        const newPaths = links.map((link, index) => {
             const fromEl = document.getElementById(`station-card-${link.from}`);
             const toEl = document.getElementById(`station-card-${link.to}`);
 
@@ -273,130 +318,133 @@ const LinkOverlay = ({
             const fromRect = fromEl.getBoundingClientRect();
             const toRect = toEl.getBoundingClientRect();
 
-            const x1 = (fromRect.left - cRect.left) / zoom;
-            const y1 = (fromRect.top - cRect.top) / zoom;
-            const w1 = fromRect.width / zoom;
-            const h1 = fromRect.height / zoom;
+            const fromX = (fromRect.left - containerRect.left) / zoom;
+            const fromY = (fromRect.top - containerRect.top) / zoom;
+            const fromW = fromRect.width / zoom;
+            const fromH = fromRect.height / zoom;
 
-            const x2 = (toRect.left - cRect.left) / zoom;
-            const y2 = (toRect.top - cRect.top) / zoom;
-            const w2 = toRect.width / zoom;
-            const h2 = toRect.height / zoom;
+            const toX = (toRect.left - containerRect.left) / zoom;
+            const toY = (toRect.top - containerRect.top) / zoom;
+            const toW = toRect.width / zoom;
+            const toH = toRect.height / zoom;
 
-            const cx1 = x1 + w1 / 2;
-            const cy1 = y1 + h1 / 2;
-            const cx2 = x2 + w2 / 2;
-            const cy2 = y2 + h2 / 2;
+            const srcCx = fromX + fromW / 2;
+            const srcCy = fromY + fromH / 2;
+            const tgtCx = toX + toW / 2;
+            const tgtCy = toY + toH / 2;
 
-            const angle = Math.atan2(cy2 - cy1, cx2 - cx1) * 180 / Math.PI;
+            const srcRight = fromX + fromW - 2; 
+            const srcBottom = fromY + fromH - 2;
+            const tgtLeft = toX + 2;
+            const tgtTop = toY + 2;
+            const tgtBottom = toY + toH - 2;
+
+            let points: {x: number, y: number}[] = [];
+            let labelX = 0;
+            let labelY = 0;
             
-            const isRight = angle > -45 && angle <= 45;
-            const isBottom = angle > 45 && angle <= 135;
-            const isLeft = angle > 135 || angle <= -135;
-            const isTop = angle > -135 && angle <= -45;
+            // Assign distinct color based on index
+            const color = PATH_COLORS[index % PATH_COLORS.length];
+            
+            let type: 'forward' | 'loop' | 'vertical' = 'forward';
 
-            const dist = Math.sqrt(Math.pow(cx2 - cx1, 2) + Math.pow(cy2 - cy1, 2));
-            const cpDist = Math.min(dist * 0.5, 150);
-
-            let startX, startY, endX, endY, c1x, c1y, c2x, c2y;
-
-            if (isBottom) {
-                startX = cx1; startY = y1 + h1;
-                endX = cx2; endY = y2;
-                c1x = startX; c1y = startY + cpDist;
-                c2x = endX; c2y = endY - cpDist;
-            } else if (isTop) {
-                startX = cx1; startY = y1;
-                endX = cx2; endY = y2 + h2;
-                c1x = startX; c1y = startY - cpDist;
-                c2x = endX; c2y = endY + cpDist;
-            } else if (isRight) {
-                startX = x1 + w1; startY = cy1;
-                endX = x2; endY = cy2;
-                c1x = startX + cpDist; c1y = startY;
-                c2x = endX - cpDist; c2y = endY;
-            } else { // Left
-                startX = x1; startY = cy1;
-                endX = x2 + w2; endY = cy2;
-                c1x = startX - cpDist; c1y = startY;
-                c2x = endX + cpDist; c2y = endY;
+            if (toX > fromX + fromW + 20) {
+                // Forward
+                const startX = srcRight;
+                const startY = srcCy;
+                const endX = tgtLeft;
+                const endY = tgtCy;
+                const midX = startX + (endX - startX) / 2;
+                points = [{ x: startX, y: startY }, { x: midX, y: startY }, { x: midX, y: endY }, { x: endX, y: endY }];
+                labelX = midX;
+                labelY = (startY + endY) / 2;
+                type = 'forward';
+            } else if (toY > fromY + fromH + 20 && Math.abs(tgtCx - srcCx) < fromW) {
+                // Vertical
+                const startX = srcCx;
+                const startY = srcBottom;
+                const endX = tgtCx;
+                const endY = tgtTop;
+                const midY = startY + (endY - startY) / 2;
+                points = [{ x: startX, y: startY }, { x: startX, y: midY }, { x: endX, y: midY }, { x: endX, y: endY }];
+                labelX = (startX + endX) / 2;
+                labelY = midY;
+                type = 'vertical';
+            } else {
+                // Loopback - Staggered Lanes
+                const startX = srcCx;
+                const startY = srcBottom;
+                const endX = tgtCx;
+                const endY = tgtBottom;
+                
+                // Increase spacing between lanes (8px -> 10px) and offset base to clear cards
+                const laneOffset = (index % 6) * 10; 
+                const busY = Math.max(startY, endY) + 20 + laneOffset; 
+                
+                points = [{ x: startX, y: startY }, { x: startX, y: busY }, { x: endX, y: busY }, { x: endX, y: endY }];
+                labelX = (startX + endX) / 2;
+                labelY = busY;
+                type = 'loop';
             }
-
-            const labelX = 0.125 * startX + 0.375 * c1x + 0.375 * c2x + 0.125 * endX;
-            const labelY = 0.125 * startY + 0.375 * c1y + 0.375 * c2y + 0.125 * endY;
 
             return {
                 id: link.id,
-                path: `M ${startX} ${startY} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${endX} ${endY}`,
+                path: getRoundedPath(points, 10),
                 labelX,
                 labelY,
-                label: link.label
+                label: link.label,
+                color,
+                type
             };
         }).filter(Boolean) as any[];
 
         setPaths(newPaths);
-    }, [links, stations, showLinks, zoom]); 
+    }, [links, stations, showLinks, zoom]);
 
-    useEffect(() => {
-        calculatePaths();
-        const interval = setInterval(calculatePaths, 100); 
-        return () => clearInterval(interval);
+    useLayoutEffect(() => {
+        const frame = requestAnimationFrame(calculatePaths);
+        return () => cancelAnimationFrame(frame);
     }, [calculatePaths]);
 
     if (!showLinks) return null;
 
+    const dynamicStrokeWidth = 2.5 / zoom; 
+    const dynamicHoverWidth = 20 / zoom;
+
     return (
         <svg className="absolute inset-0 w-full h-full pointer-events-none z-0 overflow-visible">
             <defs>
-                <marker id="arrowhead-link" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-                    <path d="M0,0 L10,3.5 L0,7 Z" fill="#94a3b8" />
-                </marker>
+                {/* Dynamically generate markers for each color */}
+                {PATH_COLORS.map(c => (
+                    <marker key={c} id={`arrow-${c.replace('#','')}`} markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto">
+                        <path d="M0,0 L5,2.5 L0,5 Z" fill={c} />
+                    </marker>
+                ))}
             </defs>
             {paths.map(p => (
-                <g key={p.id}>
+                <g key={p.id} className="group pointer-events-auto">
+                    <path d={p.path} stroke="transparent" strokeWidth={dynamicHoverWidth} fill="none" className="cursor-pointer" onClick={() => onEditLabel(p.id, p.label)} />
                     <path 
                         d={p.path} 
-                        stroke="transparent" 
-                        strokeWidth="15" 
+                        stroke={p.color} 
+                        strokeWidth={dynamicStrokeWidth} 
                         fill="none" 
-                        className="cursor-pointer pointer-events-auto"
-                        onClick={() => onEditLabel(p.id, p.label)}
+                        strokeLinecap="round" 
+                        strokeLinejoin="round" 
+                        markerEnd={`url(#arrow-${p.color.replace('#','')})`} 
+                        className="pointer-events-none transition-all duration-300 group-hover:stroke-width-[4px]" 
                     />
-                    <path 
-                        d={p.path} 
-                        stroke="#94a3b8" 
-                        strokeWidth="2.5" 
-                        fill="none" 
-                        strokeDasharray="4 2"
-                        markerEnd="url(#arrowhead-link)" 
-                        className="pointer-events-none"
-                    />
-                    <foreignObject x={p.labelX - 60} y={p.labelY - 15} width="120" height="30" className="pointer-events-auto overflow-visible">
-                        <div className="flex items-center justify-center gap-1 scale-90 hover:scale-100">
+                    <circle r={3 / zoom} fill={p.color} className="opacity-0 group-hover:opacity-100">
+                        <animateMotion dur="2s" repeatCount="indefinite" path={p.path} />
+                    </circle>
+                    <foreignObject x={p.labelX - (60 / zoom)} y={p.labelY - (15 / zoom)} width={120 / zoom} height={30 / zoom} className="overflow-visible">
+                        <div className="flex items-center justify-center gap-1 hover:scale-110 transition-transform origin-center" style={{ transform: `scale(${1/zoom})` }}>
                             {p.label ? (
-                                <div 
-                                    onClick={() => onEditLabel(p.id, p.label)}
-                                    className="bg-white text-slate-600 text-[9px] font-bold px-2 py-1 rounded-full shadow-sm border border-slate-200 whitespace-nowrap cursor-pointer hover:bg-slate-50 max-w-[100px] truncate"
-                                    title={p.label}
-                                >
-                                    {p.label}
-                                </div>
+                                <div onClick={() => onEditLabel(p.id, p.label)} className="bg-white text-slate-700 text-[10px] font-bold px-2 py-1 rounded-lg shadow-md border border-slate-200 whitespace-nowrap cursor-pointer hover:bg-indigo-50 hover:border-indigo-200 max-w-[100px] truncate" title={p.label}>{p.label}</div>
                             ) : (
-                                <button 
-                                    onClick={() => onEditLabel(p.id)}
-                                    className="bg-white text-slate-400 p-1 rounded-full border border-slate-200 shadow-sm hover:text-indigo-500 hover:border-indigo-200"
-                                    title="Ajouter Commentaire"
-                                >
-                                    <MessageSquare className="w-3 h-3" />
-                                </button>
+                                <button onClick={() => onEditLabel(p.id)} className="bg-white p-1 rounded-full border border-slate-200 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-indigo-500"><MessageSquare className="w-3 h-3" /></button>
                             )}
-                            <button 
-                                onClick={() => onRemoveLink(p.id)}
-                                className="bg-white text-slate-300 p-1 rounded-full border border-slate-200 shadow-sm hover:text-rose-500 hover:bg-rose-50 hover:border-rose-200"
-                                title="Supprimer Lien"
-                            >
-                                <X className="w-3 h-3" />
-                            </button>
+                            <button onClick={() => onRemoveLink(p.id)} className="bg-white text-slate-300 p-1 rounded-full border border-slate-200 shadow-sm hover:text-rose-500 hover:bg-rose-50 opacity-0 group-hover:opacity-100 transition-opacity"><X className="w-3 h-3" /></button>
                         </div>
                     </foreignObject>
                 </g>
@@ -424,7 +472,9 @@ export default function Implantation({
     complexityFactors,
     standardTimes,
     fabricSettings,
-    onSave
+    onSave,
+    manualLinks, // Receive manualLinks as prop
+    setManualLinks // Receive setManualLinks as prop
 }: ImplantationProps) {
 
   // --- CALCULATIONS FOR HEADER ---
@@ -465,6 +515,33 @@ export default function Implantation({
   // NEW: Magnetic Mode State
   const [isMagnetic, setIsMagnetic] = useState(false);
 
+  // --- PANNING STATE (NEW) ---
+  const [isSpacePressed, setIsSpacePressed] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
+  const panStartRef = useRef({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 });
+
+  // Listen for Space Key
+  useEffect(() => {
+      const handleKeyDown = (e: KeyboardEvent) => {
+          if (e.code === 'Space' && !e.repeat && (e.target as HTMLElement).tagName !== 'INPUT' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
+              e.preventDefault(); // Prevent scrolling
+              setIsSpacePressed(true);
+          }
+      };
+      const handleKeyUp = (e: KeyboardEvent) => {
+          if (e.code === 'Space') {
+              setIsSpacePressed(false);
+              setIsPanning(false);
+          }
+      };
+      window.addEventListener('keydown', handleKeyDown);
+      window.addEventListener('keyup', handleKeyUp);
+      return () => {
+          window.removeEventListener('keydown', handleKeyDown);
+          window.removeEventListener('keyup', handleKeyUp);
+      };
+  }, []);
+
   // --- EXPORT FUNCTION ---
   const handleExportPlan = async () => {
       if (isExporting || !contentRef.current) return;
@@ -478,7 +555,6 @@ export default function Implantation({
           const originalTransform = element.style.transform;
           
           // Get bounds of content if in free mode to set PDF size accurately
-          // For now, we assume a large enough canvas or auto-size
           const width = element.scrollWidth + 100; 
           const height = element.scrollHeight + 100;
 
@@ -550,7 +626,8 @@ export default function Implantation({
           id: Date.now().toString(),
           name: templateName,
           date: new Date().toISOString(),
-          postes: postes 
+          postes: postes,
+          manualLinks: manualLinks || [] // SAVE LINKS
       };
       persistLayouts([...savedLayouts, newTemplate]);
       setTemplateName("");
@@ -562,6 +639,9 @@ export default function Implantation({
   const handleLoadTemplate = (layout: SavedLayout) => {
       if (setPostes) {
           setPostes(layout.postes);
+          if (setManualLinks) {
+              setManualLinks(layout.manualLinks || []); // LOAD LINKS
+          }
           setLayoutType('free'); 
           setShowLoadTemplateModal(false);
       }
@@ -571,7 +651,7 @@ export default function Implantation({
       persistLayouts(savedLayouts.filter(l => l.id !== id));
   };
 
-  const [manualLinks, setManualLinks] = useState<ManualLink[]>([]);
+  // REMOVED LOCAL STATE FOR MANUALLINKS HERE - USING PROPS
   const [isLinking, setIsLinking] = useState(false);
   const [linkSource, setLinkSource] = useState<string | null>(null);
   const [showLinks, setShowLinks] = useState(true);
@@ -656,12 +736,26 @@ export default function Implantation({
       setFreeContextMenu(null);
   };
 
-  const handleFreeMouseDown = (e: React.MouseEvent, id: string, currentX: number, currentY: number) => {
-      if (e.button !== 0) return; 
+  // --- MOUSE & TOUCH HANDLERS FOR FREE MODE (DRAGGING ITEMS) ---
+  const handleFreeStart = (e: React.MouseEvent | React.TouchEvent, id: string, currentX: number, currentY: number) => {
+      if (isSpacePressed) return; // Allow panning instead of dragging items if space is pressed
+      
+      if (e.type === 'mousedown' && (e as React.MouseEvent).button !== 0) return; 
+      
+      let clientX, clientY;
+      if (e.type === 'touchstart') {
+          // Prevent scrolling while dragging (handled in useEffect, here we just capture coords)
+          clientX = (e as React.TouchEvent).touches[0].clientX;
+          clientY = (e as React.TouchEvent).touches[0].clientY;
+      } else {
+          clientX = (e as React.MouseEvent).clientX;
+          clientY = (e as React.MouseEvent).clientY;
+      }
+
       freeDragRef.current = {
           id,
-          startX: e.clientX,
-          startY: e.clientY,
+          startX: clientX,
+          startY: clientY,
           startLeft: currentX,
           startTop: currentY,
           hasMoved: false
@@ -669,14 +763,26 @@ export default function Implantation({
   };
 
   useEffect(() => {
-      const handleMove = (e: MouseEvent) => {
+      const handleMove = (e: MouseEvent | TouchEvent) => {
           if (!freeDragRef.current || !setPostes) return;
           
-          const { id, startX, startY, startLeft, startTop } = freeDragRef.current;
-          const dx = (e.clientX - startX) / zoom;
-          const dy = (e.clientY - startY) / zoom;
+          let clientX, clientY;
+          if (e.type === 'touchmove') {
+              if (e.cancelable) e.preventDefault(); 
+              clientX = (e as TouchEvent).touches[0].clientX;
+              clientY = (e as TouchEvent).touches[0].clientY;
+          } else {
+              clientX = (e as MouseEvent).clientX;
+              clientY = (e as MouseEvent).clientY;
+          }
           
-          if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+          const { id, startX, startY, startLeft, startTop } = freeDragRef.current;
+          
+          // PRECISION FIX: Round the delta to avoid sub-pixel jitter
+          const dx = Math.round((clientX - startX) / zoom);
+          const dy = Math.round((clientY - startY) / zoom);
+          
+          if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
               freeDragRef.current.hasMoved = true;
           }
 
@@ -695,12 +801,43 @@ export default function Implantation({
       if (layoutType === 'free') {
           window.addEventListener('mousemove', handleMove);
           window.addEventListener('mouseup', handleUp);
+          window.addEventListener('touchmove', handleMove, { passive: false });
+          window.addEventListener('touchend', handleUp);
       }
       return () => {
           window.removeEventListener('mousemove', handleMove);
           window.removeEventListener('mouseup', handleUp);
+          window.removeEventListener('touchmove', handleMove);
+          window.removeEventListener('touchend', handleUp);
       };
   }, [layoutType, zoom, setPostes]);
+
+  // --- PANNING HANDLERS ---
+  const handlePanStart = (e: React.MouseEvent) => {
+      if (isSpacePressed && scrollContainerRef.current) {
+          e.preventDefault();
+          setIsPanning(true);
+          panStartRef.current = {
+              x: e.clientX,
+              y: e.clientY,
+              scrollLeft: scrollContainerRef.current.scrollLeft,
+              scrollTop: scrollContainerRef.current.scrollTop
+          };
+      }
+  };
+
+  const handlePanMove = (e: React.MouseEvent) => {
+      if (isPanning && scrollContainerRef.current) {
+          const dx = e.clientX - panStartRef.current.x;
+          const dy = e.clientY - panStartRef.current.y;
+          scrollContainerRef.current.scrollLeft = panStartRef.current.scrollLeft - dx;
+          scrollContainerRef.current.scrollTop = panStartRef.current.scrollTop - dy;
+      }
+  };
+
+  const handlePanEnd = () => {
+      setIsPanning(false);
+  };
 
   const rotateStation = (stationId: string) => {
       if (!setPostes) return;
@@ -723,7 +860,7 @@ export default function Implantation({
   };
 
   const handleLinkClick = (stationId: string) => {
-      if (!isLinking) return;
+      if (!isLinking || !setManualLinks || !manualLinks) return;
 
       if (!linkSource) {
           setLinkSource(stationId);
@@ -746,13 +883,17 @@ export default function Implantation({
   };
 
   const handleRemoveLink = (linkId: string) => {
-      setManualLinks(prev => prev.filter(l => l.id !== linkId));
+      if (setManualLinks) {
+          setManualLinks(prev => prev.filter(l => l.id !== linkId));
+      }
   };
 
   const handleEditLinkLabel = (linkId: string, currentLabel?: string) => {
-      const newLabel = window.prompt("Ajouter un commentaire (Flux):", currentLabel || "");
-      if (newLabel !== null) {
-          setManualLinks(prev => prev.map(l => l.id === linkId ? { ...l, label: newLabel } : l));
+      if (setManualLinks) {
+          const newLabel = window.prompt("Ajouter un commentaire (Flux):", currentLabel || "");
+          if (newLabel !== null) {
+              setManualLinks(prev => prev.map(l => l.id === linkId ? { ...l, label: newLabel } : l));
+          }
       }
   };
 
@@ -1064,25 +1205,46 @@ export default function Implantation({
       }
   };
 
-  const handleRemoveFromCanvas = (stationIdBase: string) => {
+  const handleRemoveFromCanvas = (stationId: string) => {
       if (setPostes && postes) {
-          const idx = postes.findIndex(p => p.id === stationIdBase);
+          const idx = postes.findIndex(p => p.id === stationId);
           if (idx !== -1) {
               const newPostes = [...postes];
               const itemToRemove = { ...newPostes[idx], isPlaced: false };
-              if (isMagnetic) {
-                  newPostes.splice(idx, 1);
-                  newPostes.push(itemToRemove);
-                  const videItem: Poste = { id: `empty-auto-fill-${Date.now()}`, name: 'Slot', machine: 'VIDE', isPlaced: true, colorName: 'vide' };
-                  let lastPlacedIdx = -1;
-                  for (let i = newPostes.length - 1; i >= 0; i--) { if (newPostes[i].isPlaced) { lastPlacedIdx = i; break; } }
-                  newPostes.splice(lastPlacedIdx + 1, 0, videItem);
+              
+              // Only remove completely if it's an auto-generated empty slot or manual empty slot
+              const isRealStation = itemToRemove.machine !== 'VIDE' || (itemToRemove.notes && itemToRemove.notes.length > 0);
+
+              if (isRealStation) {
+                  // Keep it, just unplace it
+                  if (isMagnetic) {
+                      newPostes.splice(idx, 1); // Remove from current position
+                      newPostes.push(itemToRemove); // Add to end (waiting list)
+                      
+                      // Add empty slot to fill gap if needed (magnetic behavior)
+                      const videItem: Poste = { id: `empty-auto-fill-${Date.now()}`, name: 'Slot', machine: 'VIDE', isPlaced: true, colorName: 'vide' };
+                      let lastPlacedIdx = -1;
+                      for (let i = newPostes.length - 1; i >= 0; i--) { if (newPostes[i].isPlaced) { lastPlacedIdx = i; break; } }
+                      newPostes.splice(lastPlacedIdx + 1, 0, videItem);
+                  } else {
+                      const videItem: Poste = { id: `empty-replaced-${Date.now()}`, name: 'Slot', machine: 'VIDE', isPlaced: true, colorName: 'vide' };
+                      newPostes[idx] = videItem; // Replace with empty slot
+                      newPostes.push(itemToRemove); // Add to end (waiting list)
+                  }
               } else {
-                  const videItem: Poste = { id: `empty-replaced-${Date.now()}`, name: 'Slot', machine: 'VIDE', isPlaced: true, colorName: 'vide' };
-                  newPostes[idx] = videItem;
-                  newPostes.push(itemToRemove);
+                  // It's just an empty slot
+                  if (isMagnetic) {
+                       newPostes.splice(idx, 1);
+                  } else {
+                       newPostes[idx] = { ...newPostes[idx], machine: 'VIDE', name: 'Slot', colorName: 'vide' };
+                  }
               }
               setPostes(newPostes);
+
+              // CLEANUP: Remove any links associated with this station (USING PROPS)
+              if (setManualLinks) {
+                  setManualLinks(prev => prev.filter(l => l.from !== stationId && l.to !== stationId));
+              }
           }
       }
   };
@@ -1102,7 +1264,11 @@ export default function Implantation({
   const wheatGroups = useMemo(() => { const groups = []; let currentGroup: { left: Workstation | null, right: Workstation | null } = { left: null, right: null }; workstations.forEach((st, i) => { if (!currentGroup.left) { currentGroup.left = st; } else { currentGroup.right = st; groups.push(currentGroup); currentGroup = { left: null, right: null }; } }); if (currentGroup.left) { groups.push(currentGroup); } return groups; }, [workstations]);
   const machinesSummary = useMemo(() => { const summary: Record<string, number> = {}; let total = 0; workstations.forEach(st => { const mName = st.machine.toUpperCase().includes('MAN') ? 'MAN' : st.machine; if (!summary[mName]) summary[mName] = 0; summary[mName] += 1; total += 1; }); return { counts: Object.entries(summary), total }; }, [workstations]);
 
-  const handleDragStart = (e: React.DragEvent, index: number, isWaitingList = false, stationId?: string) => { if (isLinking) { e.preventDefault(); return; } if (isWaitingList && stationId) { e.dataTransfer.setData("stationId", stationId); e.dataTransfer.effectAllowed = "copy"; } else if (!canEdit || !isManualMode) { return; } else { setDraggedStationIdx(index); e.dataTransfer.effectAllowed = "move"; } setEditModal(null); };
+  const handleDragStart = (e: React.DragEvent, index: number, isWaitingList = false, stationId?: string) => { 
+      if (isSpacePressed) { e.preventDefault(); return; } // Prevent drag if panning
+      if (isLinking) { e.preventDefault(); return; } 
+      if (isWaitingList && stationId) { e.dataTransfer.setData("stationId", stationId); e.dataTransfer.effectAllowed = "copy"; } else if (!canEdit || !isManualMode) { return; } else { setDraggedStationIdx(index); e.dataTransfer.effectAllowed = "move"; } setEditModal(null); 
+  };
   const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); };
   const handleDrop = (e: React.DragEvent, targetPosteIdx: number) => { e.preventDefault(); e.stopPropagation(); if (isLinking) return; const droppedStationId = e.dataTransfer.getData("stationId"); if (isManualMode && setPostes && postes) { let newPostes = [...postes]; const targetItem = newPostes[targetPosteIdx]; if (!targetItem) return; if (droppedStationId) { const waitingStationIdx = newPostes.findIndex(p => p.id === droppedStationId); if (waitingStationIdx === -1) return; const stationToPlace = { ...newPostes[waitingStationIdx], isPlaced: true }; newPostes.splice(waitingStationIdx, 1); let adjustedTargetIdx = targetPosteIdx; if (waitingStationIdx < targetPosteIdx) { adjustedTargetIdx--; } if (isMagnetic) { newPostes.splice(adjustedTargetIdx, 0, stationToPlace); } else { const currentTarget = newPostes[adjustedTargetIdx]; if (currentTarget && currentTarget.machine === 'VIDE') { newPostes[adjustedTargetIdx] = stationToPlace; } else { newPostes.splice(adjustedTargetIdx, 0, stationToPlace); } } } else if (draggedStationIdx !== null && draggedStationIdx !== undefined) { const sourceRealIdx = draggedStationIdx; if (sourceRealIdx === -1 || sourceRealIdx >= newPostes.length) return; if (sourceRealIdx === targetPosteIdx) { setDraggedStationIdx(null); return; } const sourceItem = newPostes[sourceRealIdx]; const targetSlotItem = newPostes[targetPosteIdx]; if (!sourceItem || !targetSlotItem) return; if (isMagnetic) { newPostes.splice(sourceRealIdx, 1); let finalTargetIdx = targetPosteIdx; if (sourceRealIdx < targetPosteIdx) finalTargetIdx--; newPostes.splice(finalTargetIdx, 0, sourceItem); } else { newPostes[targetPosteIdx] = sourceItem; newPostes[sourceRealIdx] = targetSlotItem; } } setPostes(newPostes); setDraggedStationIdx(null); } };
 
@@ -1113,7 +1279,42 @@ export default function Implantation({
   const handleRemoveSpecial = (type: 'CONTROLE' | 'FINITION') => { if (!setPostes || !postes) return; const reversedPostes = [...postes].reverse(); const indexToRemoveReversed = reversedPostes.findIndex(p => { const m = p.machine.toUpperCase(); if (type === 'CONTROLE') return m.includes('CONTROLE') || m.includes('CONTROL'); if (type === 'FINITION') return m.includes('FINITION'); return false; }); if (indexToRemoveReversed !== -1) { const realIndex = postes.length - 1 - indexToRemoveReversed; const newPostes = [...postes]; newPostes.splice(realIndex, 1); setPostes(reorderPostes(newPostes, swapControlFinition)); } };
   
   const handleContextMenu = (e: React.MouseEvent, station: Workstation) => { e.preventDefault(); e.stopPropagation(); setContextMenu({ visible: true, x: e.pageX, y: e.pageY, station: station }); };
-  const handleContextAction = (action: string) => { if (!contextMenu?.station || !setPostes || !postes) return; const currentStation = contextMenu.station; const currentIndex = postes.findIndex(p => p.id === currentStation.id.split('__')[0]); if (currentIndex === -1) return; switch(action) { case 'modify': handleOpenEditModal(null, currentStation); break; case 'swap': setSwapSourceId(currentStation.id); break; case 'rotate': if (layoutType === 'free') { rotateStation(currentStation.id); } break; case 'shape_circle': if (layoutType === 'free') { changeStationShape(currentStation.id, 'circle'); } break; case 'shape_rect': if (layoutType === 'free') { changeStationShape(currentStation.id, 'rect'); } break; case 'insert': const nextColorIndex = postes.length % POSTE_COLORS.length; const assignedColorName = POSTE_COLORS[nextColorIndex].name; const newPoste: Poste = { id: `P_${Date.now()}`, name: 'P?', machine: 'MAN', notes: '', operatorName: '', isPlaced: isManualMode, colorName: assignedColorName }; const newPostesInsert = [...postes]; newPostesInsert.splice(currentIndex + 1, 0, newPoste); setPostes(newPostesInsert.map((p, i) => ({ ...p, name: `P${i + 1}` }))); break; case 'delete': if (isManualMode) { handleRemoveFromCanvas(currentStation.id.split('__')[0]); } else { const newPostesDel = [...postes]; newPostesDel.splice(currentIndex, 1); setPostes(newPostesDel.map((p, i) => ({ ...p, name: `P${i + 1}` }))); } break; } setContextMenu(null); };
+  const handleContextAction = (action: string) => { 
+      if (!contextMenu?.station || !setPostes || !postes) return; 
+      const currentStation = contextMenu.station; 
+      
+      const currentIndex = postes.findIndex(p => p.id === currentStation.id); 
+      
+      if (currentIndex === -1) {
+          return;
+      }
+
+      switch(action) { 
+          case 'modify': handleOpenEditModal(null, currentStation); break; 
+          case 'swap': setSwapSourceId(currentStation.id); break; 
+          case 'rotate': if (layoutType === 'free') { rotateStation(currentStation.id); } break; 
+          case 'shape_circle': if (layoutType === 'free') { changeStationShape(currentStation.id, 'circle'); } break; 
+          case 'shape_rect': if (layoutType === 'free') { changeStationShape(currentStation.id, 'rect'); } break; 
+          case 'insert': 
+              const nextColorIndex = postes.length % POSTE_COLORS.length; 
+              const assignedColorName = POSTE_COLORS[nextColorIndex].name; 
+              const newPoste: Poste = { id: `P_${Date.now()}`, name: 'P?', machine: 'MAN', notes: '', operatorName: '', isPlaced: isManualMode, colorName: assignedColorName }; 
+              const newPostesInsert = [...postes]; 
+              newPostesInsert.splice(currentIndex + 1, 0, newPoste); 
+              setPostes(newPostesInsert.map((p, i) => ({ ...p, name: `P${i + 1}` }))); 
+              break; 
+          case 'delete': 
+              if (isManualMode) { 
+                  handleRemoveFromCanvas(currentStation.id); 
+              } else { 
+                  const newPostesDel = [...postes]; 
+                  newPostesDel.splice(currentIndex, 1); 
+                  setPostes(newPostesDel.map((p, i) => ({ ...p, name: `P${i + 1}` }))); 
+              } 
+              break; 
+      } 
+      setContextMenu(null); 
+  };
   
   const handleStationClick = (targetStation: Workstation) => { if (isLinking) { handleLinkClick(targetStation.id); return; } if (swapSourceId && setPostes && postes) { if (swapSourceId === targetStation.id) { setSwapSourceId(null); return; } const sourceBaseId = swapSourceId.split('__')[0]; const targetBaseId = targetStation.id.split('__')[0]; const sourceIndex = postes.findIndex(p => p.id === sourceBaseId); const targetIndex = postes.findIndex(p => p.id === targetBaseId); if (sourceIndex !== -1 && targetIndex !== -1) { const newPostes = [...postes]; const sourceItem = newPostes[sourceIndex]; const targetItem = newPostes[targetIndex]; newPostes[sourceIndex] = targetItem; newPostes[targetIndex] = sourceItem; const reindexed = newPostes.map((p, i) => ({ ...p, name: `P${i + 1}` })); setPostes(reindexed); } setSwapSourceId(null); } };
   const handleOpenEditModal = (e: React.MouseEvent | null, station: Workstation) => { if (e) { e.preventDefault(); e.stopPropagation(); } if (!canEdit) return; const realIdx = postes!.findIndex(p => p.id === station.id.split('__')[0]); if (realIdx === -1) return; setShowDeleteConfirm(false); setEditModal({ isOpen: true, stationIndex: realIdx, data: { ...postes![realIdx] }, color: station.color, operators: station.operators }); };
@@ -1127,13 +1328,57 @@ export default function Implantation({
       let bodyBgClass = 'bg-white'; if (isControl) bodyBgClass = 'bg-orange-50'; if (isFer) bodyBgClass = 'bg-rose-50'; if (isFinition) bodyBgClass = 'bg-purple-50'; const isSpecial = isControl || isFer || isFinition;
       const isFeeder = station.isFeeder; if (isFeeder) bodyBgClass = 'bg-blue-50/50';
       const isSwapSource = swapSourceId === station.id; const isSwapTarget = swapSourceId && swapSourceId !== station.id; const isLinkSource = linkSource === station.id; const isLinkTargetCandidate = isLinking && linkSource && linkSource !== station.id;
-      const cardHeightClass = isGrid ? 'min-h-[140px]' : (isMini ? 'min-h-[80px]' : 'h-full min-h-[140px]'); const cardWidthClass = isMini ? 'w-full' : (isGrid ? 'w-full' : 'w-44 sm:w-48 shrink-0'); const miniCardStyle = isMini ? `${color.bg} ${color.border} border-2` : `bg-white border-2`; const cursorClass = (canEdit && isManualMode && !swapSourceId && !isLinking) ? 'cursor-move' : 'cursor-default';
-      if (isVide && !isMini) { return ( <div id={`station-card-${station.id}`} onDragOver={handleDragOver} onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDrop(e, station.originalIndex); }} className={`relative rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 flex flex-col items-center justify-center gap-2 group z-10 transition-all ${cardWidthClass} ${cardHeightClass} ${isManualMode ? 'hover:bg-indigo-50 hover:border-indigo-300' : ''}`} > <div className="text-[10px] font-bold text-slate-400 uppercase">Emplacement Vide</div> {isManualMode && <div className="absolute inset-0 bg-transparent cursor-pointer" title="Déposez un poste ici"></div>} </div> ); }
-      return ( <div id={`station-card-${station.id}`} onClick={() => handleStationClick(station)} onContextMenu={(e) => { handleContextMenu(e, station); }} onDoubleClick={(e) => handleOpenEditModal(e, station)} draggable={canEdit && isManualMode && !swapSourceId && !isLinking && layoutType !== 'free'} onDragStart={(e) => handleDragStart(e, station.originalIndex, isMini, station.id)} onDragEnd={() => setDraggedStationIdx(null)} onDragOver={handleDragOver} onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDrop(e, station.originalIndex); }} className={`relative rounded-xl overflow-hidden group z-10 shadow-sm ${cardWidthClass} ${cardHeightClass} ${canEdit && isManualMode && !isLinking && layoutType !== 'free' ? 'hover:-translate-y-1 hover:shadow-lg' : ''} ${cursorClass} ${isActive ? 'ring-4 ring-emerald-400 border-emerald-500 scale-105 shadow-xl z-20' : isLinkSource ? 'ring-4 ring-indigo-500 border-indigo-600 scale-105 shadow-xl z-30 animate-pulse' : isLinkTargetCandidate ? 'cursor-pointer hover:ring-4 hover:ring-indigo-300 hover:border-indigo-400' : isSwapSource ? 'ring-4 ring-indigo-500 border-indigo-600 scale-105 shadow-xl z-30' : isSwapTarget ? 'cursor-pointer hover:ring-4 hover:ring-indigo-300 hover:border-indigo-400' : isPassed ? 'border-emerald-200 opacity-90' : (isMini ? color.border : color.border)} ${isBroken ? 'ring-2 ring-rose-500 border-rose-600 bg-rose-50' : ''} ${miniCardStyle} transition-all duration-300 flex flex-col select-none`} > <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${isActive ? 'bg-emerald-500' : (isBroken ? 'bg-rose-500' : color.fill)}`}></div> <div className={`px-2 pl-3 py-1.5 flex justify-between items-center ${isActive ? 'bg-emerald-500' : (isPassed ? 'bg-emerald-50' : (isMini ? color.bg : color.bg))} border-b ${isActive ? 'border-emerald-600' : color.border} transition-colors duration-500 relative`}> {isOverridden && <div className="absolute top-1 right-1 w-2 h-2 rounded-full bg-purple-500 ring-1 ring-white animate-pulse" title="Temps Forcé"></div>} {isBroken && <div className="absolute top-1 right-3 w-3 h-3 text-rose-600 animate-pulse"><AlertTriangle className="w-3 h-3 fill-current" /></div>} <div className="flex items-center gap-1.5"> <span className={`text-[10px] font-black ${isActive ? 'text-emerald-600 bg-white' : color.text} w-5 h-5 flex items-center justify-center bg-white rounded-md shadow-sm border border-black/5`}> {station.name.replace('P','').split('.')[0]} </span> <span className={`text-[9px] font-black uppercase truncate max-w-[80px] ${isActive ? 'text-white' : color.text}`} title={station.name}> {station.machine} </span> </div> {!isMini && ( <div className="flex items-center gap-0.5"> {isFeeder && <div title={`Alimente: ${station.targetStationName || 'Poste Suivant'}`}><GitMerge className={`w-3 h-3 ${isActive ? 'text-white' : 'text-blue-500'}`} /></div>} {hasOperator && <div title={station.operatorName}><User className={`w-3 h-3 ${isActive ? 'text-white' : 'text-slate-400'}`} /></div>} {hasNotes && <div title="Notes"><FileText className={`w-3 h-3 ${isActive ? 'text-yellow-300' : 'text-amber-400'}`} /></div>} </div> )} </div> <div className={`p-2 pl-3 flex-1 flex flex-col justify-between gap-1 ${isMini ? 'bg-white' : bodyBgClass}`}> {station.groups && station.groups.length > 0 && !isMini && ( <div className="flex flex-wrap gap-1 mb-1"> {station.groups.slice(0, 2).map(grp => ( <span key={grp} className="text-[7px] font-black uppercase text-indigo-600 bg-indigo-100 px-1 py-0.5 rounded border border-indigo-200 truncate max-w-full"> {grp} </span> ))} {station.groups.length > 2 && <span className="text-[7px] text-slate-400">+{station.groups.length - 2}</span>} </div> )} <div className="space-y-1"> {station.operations.length > 0 ? ( <> {station.operations.slice(0, isMini ? 100 : 3).map((op, i) => { const groupStyle = op.groupId ? getGroupStyle(op.groupId) : null; return ( <div key={i} className={`flex justify-between items-center gap-1.5 py-0.5 ${groupStyle && isMini ? groupStyle.bg + ' px-1.5 rounded-md -mx-1.5 my-0.5 border border-transparent hover:border-indigo-200' : ''}`}> <span className={`font-mono text-[9px] font-bold px-1 rounded border shrink-0 ${groupStyle && isMini ? 'bg-white/50 border-transparent ' + groupStyle.text : 'bg-slate-50 text-slate-400 border-slate-100'}`}> {op.order} </span> <div className={`text-[9px] font-bold leading-tight line-clamp-2 flex-1 ${groupStyle && isMini ? groupStyle.text : 'text-slate-600'}`} title={op.description}> {op.description} </div> {groupStyle && isMini && <LinkIcon className={`w-2.5 h-2.5 shrink-0 ${groupStyle.text}`} />} </div> )})} {station.operations.length > (isMini ? 100 : 3) && <div className="text-[8px] text-slate-400 italic font-medium">... +{station.operations.length - (isMini ? 100 : 3)}</div>} </> ) : ( <div className={`text-[9px] italic flex items-center justify-center ${isMini ? 'h-8' : 'h-12'} ${isOverridden ? 'text-purple-500 font-bold' : (isSpecial ? 'text-slate-400/70' : 'text-slate-300')}`}> {isOverridden ? 'Temps Forcé' : 'Vide'} </div> )} </div> <div className="flex items-center justify-between mt-auto pt-1.5 border-t border-slate-100"> <div className="flex flex-col"> <span className="text-[7px] font-bold text-slate-400 uppercase tracking-wider">Total</span> <span className={`text-sm font-bold ${isActive ? 'text-emerald-600' : (isOverridden ? 'text-purple-600' : color.text)}`}>{timeInSeconds}s</span> </div> <div className="flex flex-col items-end"> <span className="text-[7px] font-bold text-slate-400 uppercase tracking-wider">Sat.</span> <div className="flex items-center gap-1"> {station.operators > 1 && <span className={`text-[9px] font-black px-1 rounded bg-amber-100 text-amber-700`}>x{station.operators}</span>} <span className={`text-[9px] font-black ${station.saturation > 100 ? 'text-rose-500' : 'text-emerald-500'}`}>{Math.round(station.saturation)}%</span> </div> </div> </div> </div> <div className="absolute bottom-0 left-0 h-1 bg-slate-200 w-full"> <div className={`h-full ${isActive ? 'bg-emerald-400' : (isFer ? 'bg-rose-500' : (isControl ? 'bg-orange-500' : (isFinition ? 'bg-purple-500' : color.fill)))}`} style={{ width: `${Math.min(station.saturation, 100)}%` }}></div> </div> </div> ); };
+      const cardHeightClass = isGrid ? 'min-h-[140px]' : (isMini ? 'min-h-[80px]' : 'h-full min-h-[140px]'); const cardWidthClass = isMini ? 'w-full' : (isGrid ? 'w-full' : 'w-44 sm:w-48 shrink-0'); const miniCardStyle = isMini ? `${color.bg} ${color.border} border-2` : `bg-white border-2`; const cursorClass = (canEdit && isManualMode && !swapSourceId && !isLinking && !isSpacePressed) ? 'cursor-move' : 'cursor-default';
+      if (isVide && !isMini) { return ( <div id={`station-card-${station.id}`} onDragOver={handleDragOver} onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDrop(e, station.originalIndex); }} className={`relative rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 flex flex-col items-center justify-center gap-2 group z-10 transition-all ${cardWidthClass} ${cardHeightClass} ${isManualMode && !isSpacePressed ? 'hover:bg-indigo-50 hover:border-indigo-300' : ''}`} > <div className="text-[10px] font-bold text-slate-400 uppercase">Emplacement Vide</div> {isManualMode && <div className="absolute inset-0 bg-transparent cursor-pointer" title="Déposez un poste ici"></div>} </div> ); }
+      return ( 
+      <div 
+        id={isMini ? `station-card-mini-${station.id}` : `station-card-${station.id}`}
+        onClick={() => handleStationClick(station)} 
+        onContextMenu={(e) => { handleContextMenu(e, station); }} 
+        onDoubleClick={(e) => handleOpenEditModal(e, station)} 
+        draggable={canEdit && isManualMode && !swapSourceId && !isLinking && layoutType !== 'free' && !isSpacePressed} 
+        onDragStart={(e) => handleDragStart(e, station.originalIndex, isMini, station.id)} 
+        onDragEnd={() => setDraggedStationIdx(null)} 
+        onDragOver={handleDragOver} 
+        onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDrop(e, station.originalIndex); }} 
+        className={`relative rounded-xl overflow-hidden group z-10 shadow-sm ${cardWidthClass} ${cardHeightClass} ${canEdit && isManualMode && !isLinking && layoutType !== 'free' && !isSpacePressed ? 'hover:-translate-y-1 hover:shadow-lg' : ''} ${cursorClass} ${isActive ? 'ring-4 ring-emerald-400 border-emerald-500 scale-105 shadow-xl z-20' : isLinkSource ? 'ring-4 ring-indigo-500 border-indigo-600 scale-105 shadow-xl z-30 animate-pulse' : isLinkTargetCandidate ? 'cursor-pointer hover:ring-4 hover:ring-indigo-300 hover:border-indigo-400' : isSwapSource ? 'ring-4 ring-indigo-500 border-indigo-600 scale-105 shadow-xl z-30' : isSwapTarget ? 'cursor-pointer hover:ring-4 hover:ring-indigo-300 hover:border-indigo-400' : isPassed ? 'border-emerald-200 opacity-90' : (isMini ? color.border : color.border)} ${isBroken ? 'ring-2 ring-rose-500 border-rose-600 bg-rose-50' : ''} ${miniCardStyle} transition-all duration-300 flex flex-col select-none`} 
+      > 
+        <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${isActive ? 'bg-emerald-500' : (isBroken ? 'bg-rose-500' : color.fill)}`}></div> 
+        <div className={`px-2 pl-3 py-1.5 flex justify-between items-center ${isActive ? 'bg-emerald-500' : (isPassed ? 'bg-emerald-50' : (isMini ? color.bg : color.bg))} border-b ${isActive ? 'border-emerald-600' : color.border} transition-colors duration-500 relative`}> 
+            {isOverridden && <div className="absolute top-1 right-1 w-2 h-2 rounded-full bg-purple-500 ring-1 ring-white animate-pulse" title="Temps Forcé"></div>} 
+            {isBroken && <div className="absolute top-1 right-3 w-3 h-3 text-rose-600 animate-pulse"><AlertTriangle className="w-3 h-3 fill-current" /></div>} 
+            <div className="flex items-center gap-1.5"> 
+                <span className={`text-[10px] font-black ${isActive ? 'text-emerald-600 bg-white' : color.text} w-5 h-5 flex items-center justify-center bg-white rounded-md shadow-sm border border-black/5`}> {station.name.replace('P','').split('.')[0]} </span> 
+                <span className={`text-[9px] font-black uppercase truncate max-w-[80px] ${isActive ? 'text-white' : color.text}`} title={station.name}> {station.machine} </span> 
+            </div> 
+            
+            {!isMini && (
+                <div className="ml-auto mr-1 flex items-center gap-1">
+                    {isManualMode && (
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); handleRemoveFromCanvas(station.id); }}
+                            className="p-1 rounded-md bg-white/20 hover:bg-rose-100 hover:text-rose-600 text-current transition-colors opacity-0 group-hover:opacity-100 z-50"
+                            title="Retirer du plan"
+                        >
+                            <X className="w-3 h-3" />
+                        </button>
+                    )}
+                    <button 
+                        onClick={(e) => handleContextMenu(e, station)}
+                        className="p-1 rounded-md bg-white/20 hover:bg-white/40 text-current transition-colors"
+                    >
+                        <MoreVertical className="w-3 h-3" />
+                    </button>
+                </div>
+            )}
+
+            {!isMini && ( <div className="flex items-center gap-0.5"> {isFeeder && <div title={`Alimente: ${station.targetStationName || 'Poste Suivant'}`}><GitMerge className={`w-3 h-3 ${isActive ? 'text-white' : 'text-blue-500'}`} /></div>} {hasOperator && <div title={station.operatorName}><User className={`w-3 h-3 ${isActive ? 'text-white' : 'text-slate-400'}`} /></div>} {hasNotes && <div title="Notes"><FileText className={`w-3 h-3 ${isActive ? 'text-yellow-300' : 'text-amber-400'}`} /></div>} </div> )} 
+        </div> 
+        <div className={`p-2 pl-3 flex-1 flex flex-col justify-between gap-1 ${isMini ? 'bg-white' : bodyBgClass}`}> {station.groups && station.groups.length > 0 && !isMini && ( <div className="flex flex-wrap gap-1 mb-1"> {station.groups.slice(0, 2).map(grp => ( <span key={grp} className="text-[7px] font-black uppercase text-indigo-600 bg-indigo-100 px-1 py-0.5 rounded border border-indigo-200 truncate max-w-full"> {grp} </span> ))} {station.groups.length > 2 && <span className="text-[7px] text-slate-400">+{station.groups.length - 2}</span>} </div> )} <div className="space-y-1"> {station.operations.length > 0 ? ( <> {station.operations.slice(0, isMini ? 100 : 3).map((op, i) => { const groupStyle = op.groupId ? getGroupStyle(op.groupId) : null; return ( <div key={i} className={`flex justify-between items-center gap-1.5 py-0.5 ${groupStyle && isMini ? groupStyle.bg + ' px-1.5 rounded-md -mx-1.5 my-0.5 border border-transparent hover:border-indigo-200' : ''}`}> <span className={`font-mono text-[9px] font-bold px-1 rounded border shrink-0 ${groupStyle && isMini ? 'bg-white/50 border-transparent ' + groupStyle.text : 'bg-slate-50 text-slate-400 border-slate-100'}`}> {op.order} </span> <div className={`text-[9px] font-bold leading-tight line-clamp-2 flex-1 ${groupStyle && isMini ? groupStyle.text : 'text-slate-600'}`} title={op.description}> {op.description} </div> {groupStyle && isMini && <LinkIcon className={`w-2.5 h-2.5 shrink-0 ${groupStyle.text}`} />} </div> )})} {station.operations.length > (isMini ? 100 : 3) && <div className="text-[8px] text-slate-400 italic font-medium">... +{station.operations.length - (isMini ? 100 : 3)}</div>} </> ) : ( <div className={`text-[9px] italic flex items-center justify-center ${isMini ? 'h-8' : 'h-12'} ${isOverridden ? 'text-purple-500 font-bold' : (isSpecial ? 'text-slate-400/70' : 'text-slate-300')}`}> {isOverridden ? 'Temps Forcé' : 'Vide'} </div> )} </div> <div className="flex items-center justify-between mt-auto pt-1.5 border-t border-slate-100"> <div className="flex flex-col"> <span className="text-[7px] font-bold text-slate-400 uppercase tracking-wider">Total</span> <span className={`text-sm font-bold ${isActive ? 'text-emerald-600' : (isOverridden ? 'text-purple-600' : color.text)}`}>{timeInSeconds}s</span> </div> <div className="flex flex-col items-end"> <span className="text-[7px] font-bold text-slate-400 uppercase tracking-wider">Sat.</span> <div className="flex items-center gap-1"> {station.operators > 1 && <span className={`text-[9px] font-black px-1 rounded bg-amber-100 text-amber-700`}>x{station.operators}</span>} <span className={`text-[9px] font-black ${station.saturation > 100 ? 'text-rose-500' : 'text-emerald-500'}`}>{Math.round(station.saturation)}%</span> </div> </div> </div> </div> <div className="absolute bottom-0 left-0 h-1 bg-slate-200 w-full"> <div className={`h-full ${isActive ? 'bg-emerald-400' : (isFer ? 'bg-rose-500' : (isControl ? 'bg-orange-500' : (isFinition ? 'bg-purple-500' : color.fill)))}`} style={{ width: `${Math.min(station.saturation, 100)}%` }}></div> </div> </div> ); };
 
   return (
     <div className="flex flex-col h-full gap-2 relative">
-       {/* ... (Header) ... */}
+       {/* ... (Header Stats - UNCHANGED) ... */}
        <div className="bg-white rounded-xl border border-slate-200 shadow-sm mb-2 p-2 flex flex-nowrap items-center gap-2 overflow-x-auto no-scrollbar shrink-0">
             {/* OUVRIERS / HEURES */}
             <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 rounded-lg border border-slate-100 shrink-0">
@@ -1356,7 +1601,6 @@ export default function Implantation({
                </div>
            )}
 
-           {/* ... (Rest of existing Banners & Content - NO CHANGES NEEDED BELOW) ... */}
            {/* SWAP MODE BANNER */}
            {swapSourceId && !isLinking && (
                <div className="bg-orange-500 text-white px-4 py-2 text-xs font-bold flex items-center justify-between shadow-md mb-2 rounded-lg animate-in slide-in-from-top-2 z-20">
@@ -1464,12 +1708,24 @@ export default function Implantation({
                        }
                    `}</style>
 
-                   <div className="absolute inset-0 opacity-[0.4]" style={{ backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
+                   <div 
+                        className="absolute inset-0 opacity-[0.4] transition-all duration-200" 
+                        style={{ 
+                            backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', 
+                            backgroundSize: '20px 20px',
+                            cursor: isPanning ? 'grabbing' : (isSpacePressed ? 'grab' : 'default')
+                        }} 
+                   />
                    
                    {/* DROPPABLE AREA FOR MANUAL MODE - CHANGED HERE TO FIX ZOOM ALIGNMENT */}
                    <div 
                         ref={scrollContainerRef}
                         className={`flex-1 overflow-auto p-4 relative z-10 custom-scrollbar force-scrollbar flex flex-col ${orientation === 'portrait' ? 'items-center' : 'items-start pl-4'}`}
+                        style={{ cursor: isPanning ? 'grabbing' : (isSpacePressed ? 'grab' : 'auto') }}
+                        onMouseDown={handlePanStart}
+                        onMouseMove={handlePanMove}
+                        onMouseUp={handlePanEnd}
+                        onMouseLeave={handlePanEnd}
                         onContextMenu={handleFreeContextMenu} // Right click on background
                         onDragOver={(e) => isManualMode && e.preventDefault()}
                         onDrop={(e) => {
@@ -1491,15 +1747,17 @@ export default function Implantation({
                            style={{ transform: `scale(${zoom})` }}
                        >
                            {/* SVG OVERLAY FOR MANUAL LINKS - MOVED INSIDE */}
-                           <LinkOverlay 
-                               links={manualLinks} 
-                               stations={workstations} 
-                               showLinks={showLinks}
-                               zoom={zoom}
-                               containerRef={contentRef} // Passing the scaled container ref
-                               onRemoveLink={handleRemoveLink}
-                               onEditLabel={handleEditLinkLabel}
-                           />
+                           {manualLinks && (
+                               <LinkOverlay 
+                                   links={manualLinks} 
+                                   stations={workstations} 
+                                   showLinks={showLinks}
+                                   zoom={zoom}
+                                   containerRef={contentRef} // Passing the scaled container ref
+                                   onRemoveLink={handleRemoveLink}
+                                   onEditLabel={handleEditLinkLabel}
+                               />
+                           )}
                        
                            {/* FREE LAYOUT MODE */}
                            {layoutType === 'free' && (
@@ -1521,13 +1779,15 @@ export default function Implantation({
                                         return (
                                             <div
                                                 key={st.id}
-                                                className={`absolute cursor-move hover:z-50 transition-shadow ${isDraggingThis ? 'z-[100] shadow-2xl scale-105' : 'z-10'}`}
+                                                id={`station-card-${st.id}`}
+                                                className={`absolute transition-shadow ${isDraggingThis ? 'z-[100] shadow-2xl scale-105 cursor-grabbing' : 'z-10'} ${isSpacePressed ? 'cursor-grab' : 'cursor-move hover:z-50'}`}
                                                 style={{ 
                                                     left: x, 
                                                     top: y,
                                                     transform: `rotate(${rotation}deg)` 
                                                 }}
-                                                onMouseDown={(e) => handleFreeMouseDown(e, st.id, x, y)}
+                                                onMouseDown={(e) => handleFreeStart(e, st.id, x, y)}
+                                                onTouchStart={(e) => handleFreeStart(e, st.id, x, y)}
                                                 onContextMenu={(e) => {
                                                     // Prevent default context menu, let background one handle general or item specific
                                                     // For now, we use the same handler but pass station info via state if needed, or rely on selection
@@ -1914,7 +2174,16 @@ export default function Implantation({
                )}
                <div className="h-px bg-slate-100 my-1"></div>
                <button onClick={() => handleContextAction('insert')} className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-2 transition-colors"><Plus className="w-3.5 h-3.5 text-emerald-500" /> Insérer Vide</button>
-               <button onClick={() => handleContextAction('delete')} className="w-full text-left px-4 py-2.5 hover:bg-rose-50 text-rose-600 flex items-center gap-2 transition-colors"><Trash2 className="w-3.5 h-3.5" /> Supprimer</button>
+               
+               {isManualMode ? (
+                   <button onClick={() => handleContextAction('delete')} className="w-full text-left px-4 py-2.5 hover:bg-amber-50 text-amber-600 flex items-center gap-2 transition-colors font-bold">
+                       <LogOut className="w-3.5 h-3.5" /> Retirer du plan
+                   </button>
+               ) : (
+                   <button onClick={() => handleContextAction('delete')} className="w-full text-left px-4 py-2.5 hover:bg-rose-50 text-rose-600 flex items-center gap-2 transition-colors">
+                       <Trash2 className="w-3.5 h-3.5" /> Supprimer
+                   </button>
+               )}
            </div>,
            document.body
        )}
@@ -1977,7 +2246,7 @@ export default function Implantation({
                                    </div>
                                    <div className="flex items-center gap-2">
                                        <button onClick={() => handleLoadTemplate(layout)} className="px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg text-xs font-bold hover:bg-indigo-100 transition-colors">Charger</button>
-                                       <button onClick={() => handleDeleteTemplate(layout.id)} className="p-1.5 text-slate-300 hover:text-rose-500 rounded transition-colors"><Trash2 className="w-4 h-4" /></button>
+                                       <button onClick={() => handleDeleteTemplate(layout.id)} className="p-1.5 text-slate-300 hover:text-rose-500 rounded transition-colors"><Trash2 className="w-4 h-4"/></button>
                                    </div>
                                </div>
                            ))
