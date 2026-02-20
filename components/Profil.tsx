@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useAuth } from '../src/context/AuthContext';
 import { 
   Mail, 
   Phone, 
@@ -7,7 +8,8 @@ import {
   Cpu, 
   Lightbulb, 
   Award,
-  Briefcase
+  Briefcase,
+  Shield // Added Shield icon
 } from 'lucide-react';
 
 type Lang = 'fr' | 'ar' | 'en' | 'es';
@@ -69,8 +71,22 @@ const CONTENT = {
 
 export default function Profil() {
   const [lang, setLang] = useState<Lang>('fr');
+  const { user, login } = useAuth(); // Access Auth Context
   const t = CONTENT[lang];
   const isRTL = lang === 'ar';
+
+  const handleBecomeAdmin = async () => {
+    try {
+      const res = await fetch('/api/setup-admin', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        login(data.user);
+        alert("Félicitations ! Vous êtes maintenant Administrateur. Vous avez accès au tableau de bord.");
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   return (
     <div className="h-full w-full overflow-y-auto p-4 md:p-8 custom-scrollbar">
@@ -98,28 +114,48 @@ export default function Profil() {
           <div className="px-8 pb-8 pt-0 relative flex flex-col md:flex-row items-start md:items-end gap-6 -mt-16">
              <div className="w-32 h-32 rounded-2xl bg-white p-1.5 shadow-2xl shrink-0 rotate-3 transition-transform group-hover:rotate-0 duration-500">
                 <div className="w-full h-full bg-slate-100 rounded-xl flex items-center justify-center text-slate-400 font-bold text-4xl border border-slate-200 relative overflow-hidden">
-                   SB
+                   {user?.name ? user.name.substring(0, 2).toUpperCase() : 'SB'}
                 </div>
              </div>
              
              <div className={`flex-1 ${isRTL ? 'text-right' : 'text-left'} w-full pt-4 md:pt-0`}>
-                <h1 className="text-4xl font-black text-slate-800 mb-2 drop-shadow-sm tracking-tight">Soulaiman Berraadi</h1>
+                <h1 className="text-4xl font-black text-slate-800 mb-2 drop-shadow-sm tracking-tight">{user?.name || 'Soulaiman Berraadi'}</h1>
                 <div className="flex items-center gap-2 text-indigo-600 font-bold bg-indigo-50 px-4 py-1.5 rounded-full w-fit mb-6 shadow-sm border border-indigo-100">
                    <Code className="w-4 h-4" />
-                   <span className="text-sm uppercase tracking-wide">{t.role}</span>
+                   <span className="text-sm uppercase tracking-wide">{user?.role === 'admin' ? 'Administrateur' : t.role}</span>
                 </div>
                 
                 <div className={`flex flex-wrap gap-4 text-sm font-medium text-slate-600 ${isRTL ? 'flex-row-reverse justify-end' : ''}`}>
-                   <a href="mailto:soulaimaneberraadi@gmail.com" className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 hover:bg-indigo-50 rounded-lg border border-slate-200 hover:border-indigo-200 hover:text-indigo-600 transition-all">
-                      <Mail className="w-4 h-4" /> soulaimaneberraadi@gmail.com
+                   <a href={`mailto:${user?.email || 'soulaimaneberraadi@gmail.com'}`} className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 hover:bg-indigo-50 rounded-lg border border-slate-200 hover:border-indigo-200 hover:text-indigo-600 transition-all">
+                      <Mail className="w-4 h-4" /> {user?.email || 'soulaimaneberraadi@gmail.com'}
                    </a>
-                   <a href="tel:+212608793188" className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 hover:bg-emerald-50 rounded-lg border border-slate-200 hover:border-emerald-200 hover:text-emerald-600 transition-all">
-                      <Phone className="w-4 h-4" /> 06 08 79 31 88
-                   </a>
+                   {/* Only show phone for default profile or if user adds it later */}
+                   {!user && (
+                     <a href="tel:+212608793188" className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 hover:bg-emerald-50 rounded-lg border border-slate-200 hover:border-emerald-200 hover:text-emerald-600 transition-all">
+                        <Phone className="w-4 h-4" /> 06 08 79 31 88
+                     </a>
+                   )}
                 </div>
              </div>
           </div>
         </div>
+
+        {/* ADMIN ACTIVATION SECTION - Only visible if NOT admin */}
+        {user && user.role !== 'admin' && (
+          <div className="bg-gradient-to-r from-purple-50 to-indigo-50 p-6 rounded-2xl border border-purple-100 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
+            <div>
+              <h3 className="text-lg font-bold text-purple-900">Mode Administrateur</h3>
+              <p className="text-purple-700 text-sm">Activez les droits d'administration pour accéder au tableau de bord et gérer les utilisateurs.</p>
+            </div>
+            <button
+              onClick={handleBecomeAdmin}
+              className="flex items-center gap-2 px-5 py-2.5 bg-purple-600 text-white font-bold rounded-xl hover:bg-purple-700 transition-all shadow-lg shadow-purple-200 hover:shadow-purple-300 active:scale-95"
+            >
+              <Shield className="w-4 h-4" />
+              Activer Admin
+            </button>
+          </div>
+        )}
 
         {/* INFO GRID */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

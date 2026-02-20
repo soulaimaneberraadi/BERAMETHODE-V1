@@ -183,5 +183,7 @@ export interface ModelData {
   implantation?: {
     postes: Poste[];
     assignments: Record<string, string[]>;
+    layoutMemory?: Record<string, { id: string, x?: number, y?: number, isPlaced?: boolean, rotation?: number }[]>;
+    activeLayout?: 'zigzag' | 'snake' | 'grid' | 'wheat' | 'free' | 'line'; // NEW: Persist active layout
   };
 }

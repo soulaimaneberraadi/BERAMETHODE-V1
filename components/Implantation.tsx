@@ -87,7 +87,13 @@ import {
   FolderOpen,
   Image as ImageIcon,
   Loader2,
-  LogOut // Used for "Remove from Plan" icon
+  LogOut,
+  LayoutTemplate,
+  Menu,
+  CircleDashed,
+  AlignJustify as AlignIcon,
+  Columns,
+  ChevronDown
 } from 'lucide-react';
 
 // Declare html2pdf globally
@@ -108,6 +114,10 @@ interface ImplantationProps {
   assignments?: Record<string, string[]>;
   postes?: Poste[];
   setPostes?: React.Dispatch<React.SetStateAction<Poste[]>>;
+  layoutMemory?: Record<string, { id: string, x?: number, y?: number, isPlaced?: boolean, rotation?: number }[]>;
+  setLayoutMemory?: React.Dispatch<React.SetStateAction<Record<string, { id: string, x?: number, y?: number, isPlaced?: boolean, rotation?: number }[]>>>;
+  activeLayout?: 'zigzag' | 'snake' | 'grid' | 'wheat' | 'free' | 'line';
+  setActiveLayout?: React.Dispatch<React.SetStateAction<'zigzag' | 'snake' | 'grid' | 'wheat' | 'free' | 'line'>>;
   machines: Machine[];
   // Calculation Params
   speedFactors: any[];
@@ -229,8 +239,8 @@ const SpecialZoneControl = ({ label, type, icon: Icon, color, currentCount, onAd
     </div>
 );
 
-// HELPER: Create Smooth SVG Path with Rounded Corners
-const getRoundedPath = (points: {x: number, y: number}[], radius: number = 12) => {
+// HELPER: Create Orthogonal Path (Manhattan Style) with Rounded Corners
+const getOrthogonalPath = (points: {x: number, y: number}[], radius: number = 10) => {
     if (points.length < 2) return "";
     let d = `M ${points[0].x} ${points[0].y}`;
     
@@ -239,33 +249,42 @@ const getRoundedPath = (points: {x: number, y: number}[], radius: number = 12) =
         const p1 = points[i];
         const p2 = points[i+1];
         
-        // Vector p0 -> p1
-        const v1 = { x: p1.x - p0.x, y: p1.y - p0.y };
-        const len1 = Math.sqrt(v1.x*v1.x + v1.y*v1.y);
+        // Directions
+        const dx1 = p1.x - p0.x;
+        const dy1 = p1.y - p0.y;
+        const dx2 = p2.x - p1.x;
+        const dy2 = p2.y - p1.y;
+
+        // Normalize direction vectors
+        const len1 = Math.sqrt(dx1*dx1 + dy1*dy1);
+        const len2 = Math.sqrt(dx2*dx2 + dy2*dy2);
         
-        // Vector p1 -> p2
-        const v2 = { x: p2.x - p1.x, y: p2.y - p1.y };
-        const len2 = Math.sqrt(v2.x*v2.x + v2.y*v2.y);
-        
-        // Clamp radius to prevent artifacts on short segments
+        if (len1 === 0 || len2 === 0) continue;
+
+        const ux1 = dx1 / len1;
+        const uy1 = dy1 / len1;
+        const ux2 = dx2 / len2;
+        const uy2 = dy2 / len2;
+
+        // Effective Radius (clamped)
         const r = Math.min(radius, len1/2, len2/2);
         
         // Start of curve (backing up from p1 towards p0)
         const start = {
-            x: p1.x - (v1.x / len1) * r,
-            y: p1.y - (v1.y / len1) * r
+            x: p1.x - ux1 * r,
+            y: p1.y - uy1 * r
         };
         
         // End of curve (moving from p1 towards p2)
         const end = {
-            x: p1.x + (v2.x / len2) * r,
-            y: p1.y + (v2.y / len2) * r
+            x: p1.x + ux2 * r,
+            y: p1.y + uy2 * r
         };
         
         d += ` L ${start.x} ${start.y} Q ${p1.x} ${p1.y} ${end.x} ${end.y}`;
     }
     
-    // Final point
+    // Final segment
     d += ` L ${points[points.length-1].x} ${points[points.length-1].y}`;
     return d;
 };
@@ -318,6 +337,7 @@ const LinkOverlay = ({
             const fromRect = fromEl.getBoundingClientRect();
             const toRect = toEl.getBoundingClientRect();
 
+            // Normalized Coordinates relative to container (unzoomed)
             const fromX = (fromRect.left - containerRect.left) / zoom;
             const fromY = (fromRect.top - containerRect.top) / zoom;
             const fromW = fromRect.width / zoom;
@@ -328,68 +348,64 @@ const LinkOverlay = ({
             const toW = toRect.width / zoom;
             const toH = toRect.height / zoom;
 
-            const srcCx = fromX + fromW / 2;
+            // Anchor Points
+            const srcRight = fromX + fromW; 
             const srcCy = fromY + fromH / 2;
-            const tgtCx = toX + toW / 2;
+            const srcBottom = fromY + fromH;
+            
+            const tgtLeft = toX;
             const tgtCy = toY + toH / 2;
-
-            const srcRight = fromX + fromW - 2; 
-            const srcBottom = fromY + fromH - 2;
-            const tgtLeft = toX + 2;
-            const tgtTop = toY + 2;
-            const tgtBottom = toY + toH - 2;
+            const tgtBottom = toY + toH;
 
             let points: {x: number, y: number}[] = [];
             let labelX = 0;
             let labelY = 0;
             
-            // Assign distinct color based on index
             const color = PATH_COLORS[index % PATH_COLORS.length];
-            
             let type: 'forward' | 'loop' | 'vertical' = 'forward';
 
+            // MANHATTAN ROUTING LOGIC (ORTHOGONAL)
             if (toX > fromX + fromW + 20) {
-                // Forward
-                const startX = srcRight;
-                const startY = srcCy;
-                const endX = tgtLeft;
-                const endY = tgtCy;
-                const midX = startX + (endX - startX) / 2;
-                points = [{ x: startX, y: startY }, { x: midX, y: startY }, { x: midX, y: endY }, { x: endX, y: endY }];
+                // Forward Flow (Standard)
+                // Right -> Mid -> Left
+                const midX = srcRight + (tgtLeft - srcRight) / 2;
+                
+                points = [
+                    { x: srcRight, y: srcCy },
+                    { x: midX, y: srcCy },
+                    { x: midX, y: tgtCy },
+                    { x: tgtLeft, y: tgtCy }
+                ];
+                
                 labelX = midX;
-                labelY = (startY + endY) / 2;
+                labelY = (srcCy + tgtCy) / 2;
                 type = 'forward';
-            } else if (toY > fromY + fromH + 20 && Math.abs(tgtCx - srcCx) < fromW) {
-                // Vertical
-                const startX = srcCx;
-                const startY = srcBottom;
-                const endX = tgtCx;
-                const endY = tgtTop;
-                const midY = startY + (endY - startY) / 2;
-                points = [{ x: startX, y: startY }, { x: startX, y: midY }, { x: endX, y: midY }, { x: endX, y: endY }];
-                labelX = (startX + endX) / 2;
-                labelY = midY;
-                type = 'vertical';
+
             } else {
-                // Loopback - Staggered Lanes
-                const startX = srcCx;
-                const startY = srcBottom;
-                const endX = tgtCx;
-                const endY = tgtBottom;
+                // Backward Loop (Feedback) or Vertical Stack
+                // "Manhattan Loop": Out Right -> Down -> Back -> Up -> In Left
                 
-                // Increase spacing between lanes (8px -> 10px) and offset base to clear cards
-                const laneOffset = (index % 6) * 10; 
-                const busY = Math.max(startY, endY) + 20 + laneOffset; 
+                const laneOffset = (index % 5 + 1) * 12; // Avoid overlapping lines
+                const busY = Math.max(srcBottom, tgtBottom) + 20 + laneOffset;
                 
-                points = [{ x: startX, y: startY }, { x: startX, y: busY }, { x: endX, y: busY }, { x: endX, y: endY }];
-                labelX = (startX + endX) / 2;
+                // Exit Right -> Down -> Left (Back) -> Up -> Enter Left
+                points = [
+                    { x: srcRight, y: srcCy },
+                    { x: srcRight + 20 + laneOffset, y: srcCy }, // Push out a bit
+                    { x: srcRight + 20 + laneOffset, y: busY },
+                    { x: tgtLeft - 20 - laneOffset, y: busY },
+                    { x: tgtLeft - 20 - laneOffset, y: tgtCy },
+                    { x: tgtLeft, y: tgtCy }
+                ];
+
+                labelX = (srcRight + 20 + tgtLeft - 20) / 2;
                 labelY = busY;
                 type = 'loop';
             }
 
             return {
                 id: link.id,
-                path: getRoundedPath(points, 10),
+                path: getOrthogonalPath(points, 12),
                 labelX,
                 labelY,
                 label: link.label,
@@ -467,6 +483,10 @@ export default function Implantation({
     assignments,
     postes,
     setPostes,
+    layoutMemory,
+    setLayoutMemory,
+    activeLayout,
+    setActiveLayout,
     machines,
     speedFactors,
     complexityFactors,
@@ -488,7 +508,64 @@ export default function Implantation({
   const prodHourEff = hours > 0 ? prodDayEff / hours : 0;
 
   // --- STATE ---
-  const [layoutType, setLayoutType] = useState<'zigzag' | 'snake' | 'grid' | 'wheat' | 'free'>('zigzag'); 
+  // Use prop if available, otherwise fallback to local state (though prop should always be passed now)
+  const [localLayoutType, setLocalLayoutType] = useState<'zigzag' | 'snake' | 'grid' | 'wheat' | 'free' | 'line'>('zigzag'); 
+  const layoutType = activeLayout || localLayoutType;
+  const setLayoutType = setActiveLayout || setLocalLayoutType;
+
+  // REMOVED LOCAL layoutMemory - USING PROPS
+
+  const handleLayoutChange = (newType: 'zigzag' | 'snake' | 'grid' | 'wheat' | 'free' | 'line') => {
+      if (layoutType === newType) return;
+      
+      if (setPostes && postes && layoutMemory && setLayoutMemory) {
+          // 1. Save Current State
+          const currentSnapshot = postes.map(p => ({
+              id: p.id,
+              x: p.x,
+              y: p.y,
+              isPlaced: p.isPlaced,
+              rotation: p.rotation
+          }));
+          
+          const updatedMemory = { ...layoutMemory, [layoutType]: currentSnapshot };
+          setLayoutMemory(updatedMemory);
+
+          // 2. Load New State
+          const savedSnapshot = updatedMemory[newType];
+          if (savedSnapshot) {
+              const currentPostesMap = new Map(postes.map(p => [p.id, p]));
+              const newPostes: Poste[] = [];
+              const processedIds = new Set<string>();
+
+              // Restore saved items
+              savedSnapshot.forEach(saved => {
+                  const p = currentPostesMap.get(saved.id);
+                  if (p) {
+                      newPostes.push({
+                          ...p,
+                          x: saved.x,
+                          y: saved.y,
+                          isPlaced: saved.isPlaced,
+                          rotation: saved.rotation
+                      });
+                      processedIds.add(saved.id);
+                  }
+              });
+
+              // Append new items
+              postes.forEach(p => {
+                  if (!processedIds.has(p.id)) {
+                      newPostes.push(p);
+                  }
+              });
+              
+              setPostes(newPostes);
+          }
+      }
+      setLayoutType(newType);
+  };
+
   const [orientation, setOrientation] = useState<'landscape' | 'portrait'>('landscape');
   const [draggedStationIdx, setDraggedStationIdx] = useState<number | null>(null);
   const [selectedMachineToAdd, setSelectedMachineToAdd] = useState<string>('MAN');
@@ -514,6 +591,11 @@ export default function Implantation({
   const [saveSuccess, setSaveSuccess] = useState(false);
   // NEW: Magnetic Mode State
   const [isMagnetic, setIsMagnetic] = useState(false);
+  // NEW: Sidebar Collapse State - Start open only on large screens
+  const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth >= 1024);
+  
+  // --- NEW: LAYOUT MENU TOGGLE STATE ---
+  const [isLayoutMenuOpen, setIsLayoutMenuOpen] = useState(false);
 
   // --- PANNING STATE (NEW) ---
   const [isSpacePressed, setIsSpacePressed] = useState(false);
@@ -541,6 +623,137 @@ export default function Implantation({
           window.removeEventListener('keyup', handleKeyUp);
       };
   }, []);
+
+  const toggleMagnetic = () => {
+      if (!isMagnetic) { compactPostes(); }
+      setIsMagnetic(!isMagnetic);
+  };
+
+  const activateAutoMode = () => {
+      setIsManualMode(false);
+      setLayoutType('zigzag');
+      if (setPostes && postes) {
+          const newPostes = postes.filter(p => p.machine !== 'VIDE').map(p => ({ ...p, isPlaced: true }));
+          setPostes(newPostes);
+      }
+  };
+
+  const activateManualMode = () => {
+      setIsManualMode(true);
+      setLayoutType('free');
+      if (setPostes && postes) {
+          const splitPosts: Poste[] = [];
+          const realStations = postes.filter(p => p.machine !== 'VIDE');
+          realStations.forEach(p => {
+              let totalTime = 0;
+              if (p.timeOverride !== undefined) {
+                  totalTime = p.timeOverride;
+              } else {
+                  const assignedOps = operations.filter(op => assignments?.[op.id]?.includes(p.id));
+                  assignedOps.forEach(op => {
+                      const numAssigned = assignments[op.id]?.length || 1;
+                      totalTime += (op.time || 0) / numAssigned;
+                  });
+              }
+              const nTheo = bf > 0 ? totalTime / bf : 0;
+              let operatorCount = nTheo > 1.15 ? Math.ceil(nTheo) : (nTheo > 0 ? 1 : 0);
+              operatorCount = Math.max(1, operatorCount);
+              if (operatorCount > 1 && !p.originalId) {
+                  for (let i = 1; i <= operatorCount; i++) {
+                      splitPosts.push({ ...p, id: `${p.id}__split__${i}`, originalId: p.id, name: `${p.name}.${i}`, isPlaced: false });
+                  }
+              } else {
+                  splitPosts.push({ ...p, isPlaced: false });
+              }
+          });
+          const emptySlots: Poste[] = Array.from({ length: 20 }).map((_, i) => ({ id: `empty-${Date.now()}-${i}`, name: `P${i+1}`, machine: 'VIDE', isPlaced: true, colorName: 'vide' }));
+          setPostes([...emptySlots, ...splitPosts]);
+      }
+  };
+
+  const refreshAuto = () => {
+      setIsManualMode(false);
+      if (setPostes && postes) {
+          const newPostes = postes.filter(p => p.machine !== 'VIDE').map(p => ({ ...p, isPlaced: true }));
+          setPostes(newPostes);
+      }
+      setZoom(1);
+  };
+
+  // --- AUTOMATIC LAYOUT PATTERN GENERATORS FOR FREE MODE ---
+  const applyLayoutPattern = (type: 'U' | 'CIRCLE' | 'GRID' | 'LINE') => {
+      if (!setPostes || !postes) return;
+      
+      // Ensure we are in Free Mode
+      if (layoutType !== 'free') {
+          setLayoutType('free');
+          setIsManualMode(true);
+      }
+
+      // Filter only "Active" items (Placed) to arrange
+      const itemsToArrange = postes.filter(p => p.isPlaced);
+      const otherItems = postes.filter(p => !p.isPlaced);
+      
+      const updatedItems = itemsToArrange.map((p, idx) => {
+          let x = 0, y = 0, rotation = 0;
+          
+          if (type === 'U') {
+              const colSpacing = 220;
+              const rowSpacing = 160;
+              const midPoint = Math.ceil(itemsToArrange.length / 2);
+              
+              if (idx < midPoint) {
+                  // Left Column (Top to Bottom)
+                  x = 100;
+                  y = 100 + (idx * rowSpacing);
+                  rotation = 0;
+              } else {
+                  // Right Column (Bottom to Top)
+                  x = 100 + colSpacing + 100; // Gap
+                  // idx starts from midPoint. 
+                  // If midPoint=10, idx=10. We want y to be same as idx=9
+                  // Let's make it simpler: Right side mirrors left side but going up
+                  const relativeIdx = idx - midPoint;
+                  // Start from bottom
+                  y = 100 + ((midPoint - 1 - relativeIdx) * rowSpacing);
+                  rotation = 0;
+              }
+              // Add a connector piece at bottom if odd number? Simplify for now.
+          } 
+          else if (type === 'CIRCLE') {
+              const radius = Math.max(300, itemsToArrange.length * 40);
+              const centerX = radius + 100;
+              const centerY = radius + 100;
+              const angleStep = (2 * Math.PI) / itemsToArrange.length;
+              const angle = idx * angleStep;
+              
+              x = centerX + radius * Math.cos(angle);
+              y = centerY + radius * Math.sin(angle);
+              rotation = (angle * 180) / Math.PI + 90; // Face outward
+          }
+          else if (type === 'GRID') {
+              const cols = Math.ceil(Math.sqrt(itemsToArrange.length));
+              const spacingX = 240;
+              const spacingY = 180;
+              
+              const col = idx % cols;
+              const row = Math.floor(idx / cols);
+              
+              x = 100 + (col * spacingX);
+              y = 100 + (row * spacingY);
+              rotation = 0;
+          }
+          else if (type === 'LINE') {
+              x = 100 + (idx * 240);
+              y = 300;
+              rotation = 0;
+          }
+
+          return { ...p, x, y, rotation };
+      });
+
+      setPostes([...updatedItems, ...otherItems]);
+  };
 
   // --- EXPORT FUNCTION ---
   const handleExportPlan = async () => {
@@ -697,6 +910,54 @@ export default function Implantation({
     window.addEventListener('click', handleClick);
     return () => window.removeEventListener('click', handleClick);
   }, []);
+
+  const handleContextMenu = (e: React.MouseEvent, station: Workstation) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setContextMenu({
+          visible: true,
+          x: e.pageX,
+          y: e.pageY,
+          station
+      });
+  };
+
+  const handleContextAction = (action: string) => { 
+      if (!contextMenu?.station || !setPostes || !postes) return; 
+      const currentStation = contextMenu.station; 
+      
+      const currentIndex = postes.findIndex(p => p.id === currentStation.id); 
+      
+      if (currentIndex === -1) {
+          return;
+      }
+
+      switch(action) { 
+          case 'modify': handleOpenEditModal(null, currentStation); break; 
+          case 'swap': setSwapSourceId(currentStation.id); break; 
+          case 'rotate': if (layoutType === 'free') { rotateStation(currentStation.id); } break; 
+          case 'shape_circle': if (layoutType === 'free') { changeStationShape(currentStation.id, 'circle'); } break; 
+          case 'shape_rect': if (layoutType === 'free') { changeStationShape(currentStation.id, 'rect'); } break; 
+          case 'insert': 
+              const nextColorIndex = postes.length % POSTE_COLORS.length; 
+              const assignedColorName = POSTE_COLORS[nextColorIndex].name; 
+              const newPoste: Poste = { id: `P_${Date.now()}`, name: 'P?', machine: 'MAN', notes: '', operatorName: '', isPlaced: isManualMode, colorName: assignedColorName }; 
+              const newPostesInsert = [...postes]; 
+              newPostesInsert.splice(currentIndex + 1, 0, newPoste); 
+              setPostes(newPostesInsert.map((p, i) => ({ ...p, name: `P${i + 1}` }))); 
+              break; 
+          case 'delete': 
+              if (isManualMode) { 
+                  handleRemoveFromCanvas(currentStation.id); 
+              } else { 
+                  const newPostesDel = [...postes]; 
+                  newPostesDel.splice(currentIndex, 1); 
+                  setPostes(newPostesDel.map((p, i) => ({ ...p, name: `P${i + 1}` }))); 
+              } 
+              break; 
+      } 
+      setContextMenu(null); 
+  };
 
   const handleFreeContextMenu = (e: React.MouseEvent) => {
       if (layoutType !== 'free') return;
@@ -1181,7 +1442,6 @@ export default function Implantation({
 
   const compactPostes = () => { if (!setPostes || !postes) return; const placed = postes.filter(p => p.isPlaced && p.machine !== 'VIDE'); const unplaced = postes.filter(p => !p.isPlaced && p.machine !== 'VIDE'); const emptySlotsNeeded = Math.max(0, 20 - placed.length); const empties: Poste[] = Array.from({length: emptySlotsNeeded}).map((_, i) => ({ id: `empty-auto-${Date.now()}-${i}`, name: `Slot`, machine: 'VIDE', isPlaced: true, colorName: 'vide' })); let pCount = 1; const newPlaced = placed.map(p => ({ ...p, name: `P${pCount++}` })); setPostes([...newPlaced, ...empties, ...unplaced]); };
   const renumberStations = () => { if (!setPostes || !postes) return; let pCount = 1; const reindexed = postes.map((p) => { if (p.isPlaced && p.machine !== 'VIDE') { return { ...p, name: `P${pCount++}` }; } return p; }); setPostes(reindexed); };
-  const toggleMagnetic = () => { if (!isMagnetic) { compactPostes(); } setIsMagnetic(!isMagnetic); };
   
   const handleManualDrop = (stationId: string) => {
       if (setPostes && postes) {
@@ -1236,7 +1496,8 @@ export default function Implantation({
                   if (isMagnetic) {
                        newPostes.splice(idx, 1);
                   } else {
-                       newPostes[idx] = { ...newPostes[idx], machine: 'VIDE', name: 'Slot', colorName: 'vide' };
+                       // Completely remove if manual delete requested on empty slot
+                       newPostes.splice(idx, 1);
                   }
               }
               setPostes(newPostes);
@@ -1250,10 +1511,38 @@ export default function Implantation({
   };
 
   // ... (Other helpers: addSingleEmptySlot, activateManualMode, etc. UNCHANGED) ...
-  const addSingleEmptySlot = () => { if (!setPostes || !postes) return; const newSlot: Poste = { id: `empty-manual-${Date.now()}`, name: 'Slot', machine: 'VIDE', isPlaced: true, colorName: 'vide' }; const placed = postes.filter(p => p.isPlaced); const unplaced = postes.filter(p => !p.isPlaced); setPostes([...placed, newSlot, ...unplaced]); };
-  const activateManualMode = () => { setIsManualMode(true); if (setPostes && postes) { const splitPosts: Poste[] = []; const realStations = postes.filter(p => p.machine !== 'VIDE'); realStations.forEach(p => { let totalTime = 0; if (p.timeOverride !== undefined) { totalTime = p.timeOverride; } else { const assignedOps = operations.filter(op => assignments?.[op.id]?.includes(p.id)); assignedOps.forEach(op => { const numAssigned = assignments[op.id]?.length || 1; totalTime += (op.time || 0) / numAssigned; }); } const nTheo = bf > 0 ? totalTime / bf : 0; let operatorCount = nTheo > 1.15 ? Math.ceil(nTheo) : (nTheo > 0 ? 1 : 0); operatorCount = Math.max(1, operatorCount); if (operatorCount > 1 && !p.originalId) { for (let i = 1; i <= operatorCount; i++) { splitPosts.push({ ...p, id: `${p.id}__split__${i}`, originalId: p.id, name: `${p.name}.${i}`, isPlaced: false }); } } else { splitPosts.push({ ...p, isPlaced: false }); } }); const emptySlots: Poste[] = Array.from({ length: 20 }).map((_, i) => ({ id: `empty-${Date.now()}-${i}`, name: `P${i+1}`, machine: 'VIDE', isPlaced: true, colorName: 'vide' })); setPostes([...emptySlots, ...splitPosts]); } };
-  const activateAutoMode = () => { setIsManualMode(false); if (setPostes && postes) { const newPostes = postes.filter(p => p.machine !== 'VIDE').map(p => ({ ...p, isPlaced: true })); setPostes(newPostes); } };
-  const refreshAuto = () => { setIsManualMode(false); if (setPostes && postes) { const newPostes = postes.filter(p => p.machine !== 'VIDE').map(p => ({ ...p, isPlaced: true })); setPostes(newPostes); } };
+  const addSingleEmptySlot = () => { 
+      if (!setPostes || !postes) return; 
+      
+      // Calculate center position for new empty slot
+      const containerRect = contentRef.current?.getBoundingClientRect();
+      const parentRect = scrollContainerRef.current?.getBoundingClientRect();
+      
+      let startX = 100;
+      let startY = 100;
+      
+      if (parentRect && containerRect) {
+          // Attempt to place in center of view
+          const scrollX = scrollContainerRef.current?.scrollLeft || 0;
+          const scrollY = scrollContainerRef.current?.scrollTop || 0;
+          startX = (scrollX + parentRect.width / 2) / zoom;
+          startY = (scrollY + parentRect.height / 2) / zoom;
+      }
+
+      const newSlot: Poste = { 
+          id: `empty-manual-${Date.now()}`, 
+          name: 'Slot', 
+          machine: 'VIDE', 
+          isPlaced: true, 
+          colorName: 'vide',
+          x: startX,
+          y: startY
+      }; 
+      
+      // Add to placed items (at the end of array usually, but rendered position matters)
+      setPostes([...postes, newSlot]); 
+  };
+  
   const saveManualLayout = () => { setSaveSuccess(true); setTimeout(() => setSaveSuccess(false), 3000); };
 
   useEffect(() => { let interval: any; const totalSteps = Math.max(0, (workstations.length * 2) + 2); if (simulationActive) { interval = setInterval(() => { setSimStep(prev => { if (prev >= totalSteps) { setSimulationActive(false); return totalSteps; } return prev + 1; }); }, 500); } return () => clearInterval(interval); }, [simulationActive, workstations.length]);
@@ -1278,44 +1567,6 @@ export default function Implantation({
   const handleAddSpecial = (type: 'CONTROLE' | 'FINITION') => { if (!setPostes || !postes) return; const newPoste: Poste = { id: `P_${Date.now()}`, name: 'P?', machine: type, notes: '', operatorName: '', isPlaced: isManualMode }; const newList = [...postes, newPoste]; setPostes(reorderPostes(newList, swapControlFinition)); };
   const handleRemoveSpecial = (type: 'CONTROLE' | 'FINITION') => { if (!setPostes || !postes) return; const reversedPostes = [...postes].reverse(); const indexToRemoveReversed = reversedPostes.findIndex(p => { const m = p.machine.toUpperCase(); if (type === 'CONTROLE') return m.includes('CONTROLE') || m.includes('CONTROL'); if (type === 'FINITION') return m.includes('FINITION'); return false; }); if (indexToRemoveReversed !== -1) { const realIndex = postes.length - 1 - indexToRemoveReversed; const newPostes = [...postes]; newPostes.splice(realIndex, 1); setPostes(reorderPostes(newPostes, swapControlFinition)); } };
   
-  const handleContextMenu = (e: React.MouseEvent, station: Workstation) => { e.preventDefault(); e.stopPropagation(); setContextMenu({ visible: true, x: e.pageX, y: e.pageY, station: station }); };
-  const handleContextAction = (action: string) => { 
-      if (!contextMenu?.station || !setPostes || !postes) return; 
-      const currentStation = contextMenu.station; 
-      
-      const currentIndex = postes.findIndex(p => p.id === currentStation.id); 
-      
-      if (currentIndex === -1) {
-          return;
-      }
-
-      switch(action) { 
-          case 'modify': handleOpenEditModal(null, currentStation); break; 
-          case 'swap': setSwapSourceId(currentStation.id); break; 
-          case 'rotate': if (layoutType === 'free') { rotateStation(currentStation.id); } break; 
-          case 'shape_circle': if (layoutType === 'free') { changeStationShape(currentStation.id, 'circle'); } break; 
-          case 'shape_rect': if (layoutType === 'free') { changeStationShape(currentStation.id, 'rect'); } break; 
-          case 'insert': 
-              const nextColorIndex = postes.length % POSTE_COLORS.length; 
-              const assignedColorName = POSTE_COLORS[nextColorIndex].name; 
-              const newPoste: Poste = { id: `P_${Date.now()}`, name: 'P?', machine: 'MAN', notes: '', operatorName: '', isPlaced: isManualMode, colorName: assignedColorName }; 
-              const newPostesInsert = [...postes]; 
-              newPostesInsert.splice(currentIndex + 1, 0, newPoste); 
-              setPostes(newPostesInsert.map((p, i) => ({ ...p, name: `P${i + 1}` }))); 
-              break; 
-          case 'delete': 
-              if (isManualMode) { 
-                  handleRemoveFromCanvas(currentStation.id); 
-              } else { 
-                  const newPostesDel = [...postes]; 
-                  newPostesDel.splice(currentIndex, 1); 
-                  setPostes(newPostesDel.map((p, i) => ({ ...p, name: `P${i + 1}` }))); 
-              } 
-              break; 
-      } 
-      setContextMenu(null); 
-  };
-  
   const handleStationClick = (targetStation: Workstation) => { if (isLinking) { handleLinkClick(targetStation.id); return; } if (swapSourceId && setPostes && postes) { if (swapSourceId === targetStation.id) { setSwapSourceId(null); return; } const sourceBaseId = swapSourceId.split('__')[0]; const targetBaseId = targetStation.id.split('__')[0]; const sourceIndex = postes.findIndex(p => p.id === sourceBaseId); const targetIndex = postes.findIndex(p => p.id === targetBaseId); if (sourceIndex !== -1 && targetIndex !== -1) { const newPostes = [...postes]; const sourceItem = newPostes[sourceIndex]; const targetItem = newPostes[targetIndex]; newPostes[sourceIndex] = targetItem; newPostes[targetIndex] = sourceItem; const reindexed = newPostes.map((p, i) => ({ ...p, name: `P${i + 1}` })); setPostes(reindexed); } setSwapSourceId(null); } };
   const handleOpenEditModal = (e: React.MouseEvent | null, station: Workstation) => { if (e) { e.preventDefault(); e.stopPropagation(); } if (!canEdit) return; const realIdx = postes!.findIndex(p => p.id === station.id.split('__')[0]); if (realIdx === -1) return; setShowDeleteConfirm(false); setEditModal({ isOpen: true, stationIndex: realIdx, data: { ...postes![realIdx] }, color: station.color, operators: station.operators }); };
   const closeEditModal = () => { setEditModal(null); setShowDeleteConfirm(false); };
@@ -1329,7 +1580,37 @@ export default function Implantation({
       const isFeeder = station.isFeeder; if (isFeeder) bodyBgClass = 'bg-blue-50/50';
       const isSwapSource = swapSourceId === station.id; const isSwapTarget = swapSourceId && swapSourceId !== station.id; const isLinkSource = linkSource === station.id; const isLinkTargetCandidate = isLinking && linkSource && linkSource !== station.id;
       const cardHeightClass = isGrid ? 'min-h-[140px]' : (isMini ? 'min-h-[80px]' : 'h-full min-h-[140px]'); const cardWidthClass = isMini ? 'w-full' : (isGrid ? 'w-full' : 'w-44 sm:w-48 shrink-0'); const miniCardStyle = isMini ? `${color.bg} ${color.border} border-2` : `bg-white border-2`; const cursorClass = (canEdit && isManualMode && !swapSourceId && !isLinking && !isSpacePressed) ? 'cursor-move' : 'cursor-default';
-      if (isVide && !isMini) { return ( <div id={`station-card-${station.id}`} onDragOver={handleDragOver} onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDrop(e, station.originalIndex); }} className={`relative rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 flex flex-col items-center justify-center gap-2 group z-10 transition-all ${cardWidthClass} ${cardHeightClass} ${isManualMode && !isSpacePressed ? 'hover:bg-indigo-50 hover:border-indigo-300' : ''}`} > <div className="text-[10px] font-bold text-slate-400 uppercase">Emplacement Vide</div> {isManualMode && <div className="absolute inset-0 bg-transparent cursor-pointer" title="Déposez un poste ici"></div>} </div> ); }
+      
+      // MODIFIED: Make Vide slots behave like normal cards in free mode (draggable, context menu)
+      if (isVide && !isMini) { 
+          return ( 
+            <div 
+                id={`station-card-${station.id}`} 
+                // Add drag events for Free Mode
+                onMouseDown={(e) => layoutType === 'free' && handleFreeStart(e, station.id, station.x || 0, station.y || 0)}
+                onTouchStart={(e) => layoutType === 'free' && handleFreeStart(e, station.id, station.x || 0, station.y || 0)}
+                // Keep Drop Logic
+                onDragOver={handleDragOver} 
+                onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDrop(e, station.originalIndex); }} 
+                // Context Menu
+                onContextMenu={(e) => { handleContextMenu(e, station); }}
+                className={`relative rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 flex flex-col items-center justify-center gap-2 group z-10 transition-all ${cardWidthClass} ${cardHeightClass} ${isManualMode && !isSpacePressed ? 'hover:bg-indigo-50 hover:border-indigo-300' : ''} ${layoutType === 'free' ? 'cursor-move hover:shadow-lg' : ''}`} 
+            > 
+                <div className="text-[10px] font-bold text-slate-400 uppercase pointer-events-none">Emplacement Vide</div> 
+                
+                {/* Delete Button for Free Mode */}
+                {layoutType === 'free' && (
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); handleRemoveFromCanvas(station.id); }}
+                        className="absolute top-2 right-2 p-1 text-slate-300 hover:text-rose-500 hover:bg-rose-50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                        <X className="w-3 h-3" />
+                    </button>
+                )}
+            </div> 
+          ); 
+      }
+
       return ( 
       <div 
         id={isMini ? `station-card-mini-${station.id}` : `station-card-${station.id}`}
@@ -1449,7 +1730,7 @@ export default function Implantation({
        <div ref={fullscreenWrapperRef} className={`flex flex-col flex-1 min-h-0 relative transition-all duration-300 ${isFullScreen ? 'bg-white p-4 overflow-hidden fixed inset-0 z-[5000]' : ''}`}>
            
            {/* TOOLBAR */}
-           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-1 flex flex-wrap items-center justify-between gap-2 shrink-0 z-30 mb-1">
+           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-1 flex flex-wrap items-center justify-between gap-2 shrink-0 z-30 mb-1 relative">
                
                {/* --- GROUP 1: MODES (LEFT) --- */}
                <div className="flex items-center gap-2">
@@ -1487,6 +1768,71 @@ export default function Implantation({
                        {isManualMode && (
                            <>
                                <div className="w-px h-4 bg-slate-300 mx-0.5"></div>
+                               
+                               {/* LAYOUT ASSISTANT TOGGLE (NEW) */}
+                               <button 
+                                   onClick={() => setIsLayoutMenuOpen(!isLayoutMenuOpen)}
+                                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[10px] font-bold transition-all ${isLayoutMenuOpen ? 'bg-slate-700 text-white shadow-sm' : 'text-slate-500 hover:bg-white hover:text-slate-700'}`}
+                                   title="Ouvrir les outils de disposition"
+                               >
+                                   <LayoutTemplate className="w-3.5 h-3.5" />
+                                   Disposition
+                                   <ChevronDown className={`w-3 h-3 transition-transform ${isLayoutMenuOpen ? 'rotate-180' : ''}`} />
+                               </button>
+
+                               {/* EXPANDABLE LAYOUT BAR (VISIBLE ONLY WHEN TOGGLED) */}
+                               {isLayoutMenuOpen && (
+                                   <div className="absolute top-full left-0 mt-2 p-1.5 bg-white rounded-xl shadow-xl border border-slate-200 z-50 flex items-center gap-2 animate-in slide-in-from-top-2 min-w-[300px]">
+                                       {/* Standard Layouts */}
+                                       <div className="flex items-center gap-1 pr-2 border-r border-slate-100">
+                                           <button onClick={() => handleLayoutChange('zigzag')} className={`p-1.5 rounded-md transition-all ${layoutType === 'zigzag' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`} title="U (Zigzag)">
+                                               <span className="text-[9px] font-bold">U (Standard)</span>
+                                           </button>
+                                           <button onClick={() => handleLayoutChange('line')} className={`p-1.5 rounded-md transition-all ${layoutType === 'line' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`} title="2Line">
+                                               <span className="text-[9px] font-bold">2Line</span>
+                                           </button>
+                                       </div>
+
+                                       {/* Free Mode Assistants - Only visible when Free Mode is active */}
+                                       {layoutType === 'free' && (
+                                           <div className="flex items-center gap-1 animate-in fade-in zoom-in duration-200">
+                                               <button onClick={() => applyLayoutPattern('U')} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-50 hover:text-indigo-600" title="Arranger en U">
+                                                   <Columns className="w-4 h-4" />
+                                               </button>
+                                               <button onClick={() => applyLayoutPattern('GRID')} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-50 hover:text-indigo-600" title="Arranger en Grille">
+                                                   <LayoutGrid className="w-4 h-4" />
+                                               </button>
+                                               <button onClick={() => applyLayoutPattern('CIRCLE')} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-50 hover:text-indigo-600" title="Arranger en Cercle">
+                                                   <CircleDashed className="w-4 h-4" />
+                                               </button>
+                                               <button onClick={() => applyLayoutPattern('LINE')} className="p-1.5 rounded-md text-slate-500 hover:bg-slate-50 hover:text-indigo-600" title="Arranger en Ligne">
+                                                   <AlignIcon className="w-4 h-4 rotate-90" />
+                                               </button>
+                                               <div className="w-px h-4 bg-slate-200 mx-1"></div>
+                                           </div>
+                                       )}
+                                       
+                                       <button 
+                                           onClick={() => { handleLayoutChange('free'); setIsManualMode(true); }} 
+                                           className={`px-2 py-1 flex items-center gap-1 rounded-md text-[10px] font-bold transition-all ${layoutType === 'free' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-50'}`}
+                                       >
+                                           <Move className="w-3 h-3" /> Libre
+                                       </button>
+                                   </div>
+                               )}
+
+                               <div className="w-px h-4 bg-slate-300 mx-0.5"></div>
+                               
+                               <button 
+                                   onClick={addSingleEmptySlot}
+                                   className="p-1.5 rounded-md transition-colors text-slate-500 hover:text-emerald-600 hover:bg-white"
+                                   title="Ajouter un Emplacement Vide (Manuellement)"
+                               >
+                                   <Plus className="w-3.5 h-3.5" />
+                               </button>
+
+                               <div className="w-px h-4 bg-slate-300 mx-0.5"></div>
+
                                <button 
                                    onClick={() => setIsLinking(!isLinking)}
                                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[10px] font-bold transition-all ${isLinking ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:bg-white hover:text-indigo-600'}`}
@@ -1504,14 +1850,6 @@ export default function Implantation({
                                    {showLinks ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
                                </button>
                                
-                               <div className="w-px h-4 bg-slate-300 mx-0.5"></div>
-                               <button 
-                                   onClick={toggleMagnetic}
-                                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[10px] font-bold transition-all ${isMagnetic ? 'bg-indigo-500 text-white shadow-sm' : 'text-slate-500 hover:bg-white hover:text-indigo-600'}`}
-                                   title={isMagnetic ? "Arrangement Magnétique (Compact)" : "Arrangement Libre (Grille)"}
-                                >
-                                   <Magnet className={`w-3.5 h-3.5 ${isMagnetic ? 'fill-current' : ''}`} />
-                               </button>
                                <div className="w-px h-4 bg-slate-300 mx-0.5"></div>
                                
                                {/* SAVE TEMPLATE BUTTON */}
@@ -1541,16 +1879,7 @@ export default function Implantation({
 
                {/* ... (Center & Right Toolbars remain same) ... */}
                <div className="flex items-center gap-2">
-                   {/* Layout Type */}
-                   <div className="flex items-center bg-slate-50 p-0.5 rounded-lg border border-slate-200">
-                       <button onClick={() => setLayoutType('zigzag')} className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all ${layoutType === 'zigzag' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}>U (2 Lignes)</button>
-                       <button onClick={() => setLayoutType('snake')} className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all ${layoutType === 'snake' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}>Serpent</button>
-                       <button onClick={() => setLayoutType('grid')} className={`px-2 py-1 rounded-md text-[10px] font-bold transition-all ${layoutType === 'grid' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}>Grille</button>
-                       <button onClick={() => { setLayoutType('free'); setIsManualMode(true); }} className={`px-2 py-1 flex items-center gap-1 rounded-md text-[10px] font-bold transition-all ${layoutType === 'free' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
-                           <Move className="w-3 h-3" /> Libre
-                       </button>
-                   </div>
-
+                   {/* Layout Type - REMOVED AS IT IS NOW IN THE TOGGLE MENU */}
                    {/* Orientation */}
                    <div className="flex items-center bg-slate-50 p-0.5 rounded-lg border border-slate-200">
                        <button onClick={() => setOrientation('landscape')} className={`p-1 rounded-md transition-all ${orientation === 'landscape' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`} title="Horizontal"><AlignHorizontalSpaceAround className="w-3.5 h-3.5" /></button>
@@ -1639,42 +1968,83 @@ export default function Implantation({
            </div>
 
            {/* 3. CANVAS (With Wrapper & Styles for Scrollbars) */}
-           <div className="flex-1 flex flex-col lg:flex-row gap-4 min-h-0 relative h-full">
+           <div className="flex-1 flex gap-4 min-h-0 relative h-full">
                
-               {/* MINI-GAMME SIDEBAR (VISIBLE IN MANUAL MODE) */}
+               {/* MINI-GAMME SIDEBAR (VISIBLE IN MANUAL MODE) - RESPONSIVE (DRAWER ON MOBILE) */}
                {isManualMode && (
-                   <div className="w-full lg:w-64 bg-slate-50 border border-slate-200 rounded-xl shadow-inner flex flex-col overflow-hidden shrink-0 transition-all duration-300 animate-in slide-in-from-left-2">
-                       <div className="p-3 border-b border-slate-200 bg-white flex justify-between items-center">
-                           <div>
-                               <h3 className="font-bold text-xs uppercase text-slate-500 flex items-center gap-2">
-                                   <Inbox className="w-4 h-4" /> Gamme d'attente
-                               </h3>
-                               <p className="text-[9px] text-slate-400 mt-0.5">Glissez vers la zone</p>
-                           </div>
-                           <div className="flex items-center gap-2">
-                                <button 
-                                    onClick={() => setGroupDragMode(!groupDragMode)}
-                                    className={`p-1.5 rounded-md transition-colors border ${groupDragMode ? 'bg-indigo-100 text-indigo-600 border-indigo-200' : 'bg-white text-slate-400 border-slate-200 hover:text-slate-600'}`}
-                                    title={groupDragMode ? "Déplacement Groupé Actif" : "Déplacement Simple"}
-                                >
-                                    {groupDragMode ? <LinkIcon className="w-3.5 h-3.5" /> : <Unlink2 className="w-3.5 h-3.5" />}
-                                </button>
-                               <span className="text-[10px] font-bold bg-slate-100 px-2 py-0.5 rounded text-slate-600">{waitingStations.length}</span>
-                           </div>
-                       </div>
-                       <div className="flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar">
-                           {waitingStations.map(station => (
-                               <div key={station.id} className="cursor-grab active:cursor-grabbing">
-                                   <StationCard station={station as Workstation} isMini={true} />
+                   <>
+                       {/* Mobile Backdrop */}
+                       <div 
+                           className={`lg:hidden fixed inset-0 bg-black/20 z-20 transition-opacity duration-300 ${isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                           onClick={() => setIsSidebarOpen(false)}
+                       />
+                       
+                       <div className={`absolute lg:relative h-full bg-white border-r border-slate-200 shadow-xl z-30 flex flex-col transition-all duration-300 ease-in-out shrink-0 ${isSidebarOpen ? 'w-72 translate-x-0' : 'w-0 -translate-x-full lg:w-8 lg:translate-x-0'}`}>
+                           {/* Toggle Button - Repositioned for Mobile vs Desktop */}
+                           <button
+                               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                               className={`absolute -right-3 top-4 bg-white border border-slate-200 text-slate-500 rounded-full p-1 shadow-md hover:text-indigo-600 z-50 transition-transform active:scale-95 ${!isSidebarOpen && window.innerWidth < 1024 ? 'hidden' : ''}`}
+                           >
+                               {isSidebarOpen ? <ChevronLeft className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                           </button>
+                           
+                           {/* Mobile Open Button (When Closed) */}
+                           {!isSidebarOpen && (
+                               <button 
+                                   onClick={() => setIsSidebarOpen(true)}
+                                   className="lg:hidden absolute top-4 left-4 z-20 bg-white p-2 rounded-lg shadow-md border border-slate-200 text-indigo-600"
+                               >
+                                   <Menu className="w-5 h-5" />
+                               </button>
+                           )}
+
+                           {/* Sidebar Content (Visible when open) */}
+                           <div className={`flex-1 flex flex-col overflow-hidden transition-opacity duration-200 ${isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none invisible'}`}>
+                               <div className="p-3 border-b border-slate-200 bg-white flex justify-between items-center">
+                                   <div>
+                                       <h3 className="font-bold text-xs uppercase text-slate-500 flex items-center gap-2">
+                                           <Inbox className="w-4 h-4" /> Gamme d'attente
+                                       </h3>
+                                       <p className="text-[9px] text-slate-400 mt-0.5">Glissez vers la zone</p>
+                                   </div>
+                                   <div className="flex items-center gap-2">
+                                        <button 
+                                            onClick={() => setGroupDragMode(!groupDragMode)}
+                                            className={`p-1.5 rounded-md transition-colors border ${groupDragMode ? 'bg-indigo-100 text-indigo-600 border-indigo-200' : 'bg-white text-slate-400 border-slate-200 hover:text-slate-600'}`}
+                                            title={groupDragMode ? "Déplacement Groupé Actif" : "Déplacement Simple"}
+                                        >
+                                            {groupDragMode ? <LinkIcon className="w-3.5 h-3.5" /> : <Unlink2 className="w-3.5 h-3.5" />}
+                                        </button>
+                                       <span className="text-[10px] font-bold bg-slate-100 px-2 py-0.5 rounded text-slate-600">{waitingStations.length}</span>
+                                   </div>
                                </div>
-                           ))}
-                           {waitingStations.length === 0 && (
-                               <div className="text-center py-8 text-slate-400 text-xs italic">
-                                   Tous les postes sont placés.
+                               <div className="flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar">
+                                   {waitingStations.map(station => (
+                                       <div key={station.id} className="cursor-grab active:cursor-grabbing w-full">
+                                           <StationCard station={station as Workstation} isMini={true} />
+                                       </div>
+                                   ))}
+                                   {waitingStations.length === 0 && (
+                                       <div className="text-center py-8 text-slate-400 text-xs italic">
+                                           Tous les postes sont placés.
+                                       </div>
+                                   )}
+                               </div>
+                           </div>
+
+                           {/* Collapsed State Indicator (Visible when closed on Desktop) */}
+                           {!isSidebarOpen && (
+                               <div className="absolute inset-0 flex flex-col items-center pt-16 gap-4 w-full lg:flex hidden">
+                                   <Inbox className="w-5 h-5 text-indigo-500" />
+                                   <div className="h-full w-full flex justify-center">
+                                       <span className="text-[10px] font-bold uppercase text-slate-400 tracking-widest whitespace-nowrap" style={{ writingMode: 'vertical-rl', textOrientation: 'mixed', transform: 'rotate(180deg)' }}>
+                                           Gamme d'attente ({waitingStations.length})
+                                       </span>
+                                   </div>
                                </div>
                            )}
                        </div>
-                   </div>
+                   </>
                )}
 
                {/* ... (Main Canvas Area with force-scrollbar styles same as before) ... */}
@@ -1875,7 +2245,8 @@ export default function Implantation({
                                </div>
                            )}
 
-                           {layoutType === 'zigzag' && (
+                           {/* FIXED: Combine Zigzag and Snake layouts (U-shape) */}
+                           {(layoutType === 'zigzag' || layoutType === 'snake') && (
                                <div className={`flex gap-3 pb-20 min-w-max ${orientation === 'landscape' ? 'flex-col items-start' : 'flex-row items-start pl-4'}`}>
                                    <div className="relative">
                                        
@@ -1929,8 +2300,36 @@ export default function Implantation({
                                
                            {/* OTHER LAYOUTS REMAIN SAME */}
                            {layoutType === 'grid' && (
-                               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
+                               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 min-h-[500px]">
                                    {workstations.map(st => <StationCard key={st.id} station={st} isGrid={true} />)}
+                               </div>
+                           )}
+
+                           {layoutType === 'line' && (
+                               <div className="flex flex-col gap-12 p-8 w-full">
+                                   {/* Line 1 */}
+                                   <div className="flex items-center gap-4">
+                                       <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-xs shrink-0">L1</div>
+                                       <div className="flex gap-4 overflow-x-auto pb-4 pt-2 px-2 border-b border-dashed border-slate-200 w-full custom-scrollbar">
+                                           {workstations.slice(0, Math.ceil(workstations.length / 2)).map(st => (
+                                               <div key={st.id} className="shrink-0">
+                                                   <StationCard station={st} />
+                                               </div>
+                                           ))}
+                                       </div>
+                                   </div>
+                                   
+                                   {/* Line 2 */}
+                                   <div className="flex items-center gap-4">
+                                       <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 font-bold text-xs shrink-0">L2</div>
+                                       <div className="flex gap-4 overflow-x-auto pb-4 pt-2 px-2 w-full custom-scrollbar">
+                                           {workstations.slice(Math.ceil(workstations.length / 2)).map(st => (
+                                               <div key={st.id} className="shrink-0">
+                                                   <StationCard station={st} />
+                                               </div>
+                                           ))}
+                                       </div>
+                                   </div>
                                </div>
                            )}
                        </div>

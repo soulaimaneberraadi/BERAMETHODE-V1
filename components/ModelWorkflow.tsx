@@ -65,6 +65,12 @@ interface ModelWorkflowProps {
   userVocabulary: string[];
   setUserVocabulary: React.Dispatch<React.SetStateAction<string[]>>;
 
+  // Layout Memory
+  layoutMemory: Record<string, { id: string, x?: number, y?: number, isPlaced?: boolean, rotation?: number }[]>;
+  setLayoutMemory: React.Dispatch<React.SetStateAction<Record<string, { id: string, x?: number, y?: number, isPlaced?: boolean, rotation?: number }[]>>>;
+  activeLayout: 'zigzag' | 'snake' | 'grid' | 'wheat' | 'free' | 'line';
+  setActiveLayout: React.Dispatch<React.SetStateAction<'zigzag' | 'snake' | 'grid' | 'wheat' | 'free' | 'line'>>;
+
   // Actions
   onSaveToLibrary: () => void;
   
@@ -81,6 +87,8 @@ export default function ModelWorkflow({
   ficheData, setFicheData, ficheImages, setFicheImages,
   assignments, setAssignments, postes, setPostes,
   isAutocompleteEnabled, userVocabulary, setUserVocabulary,
+  layoutMemory, setLayoutMemory,
+  activeLayout, setActiveLayout,
   onSaveToLibrary,
   onUndo, onRedo, canUndo, canRedo
 }: ModelWorkflowProps) {
@@ -314,6 +322,8 @@ export default function ModelWorkflow({
                         articleName={articleName}
                         assignments={assignments}
                         postes={postes} setPostes={setPostes}
+                        layoutMemory={layoutMemory} setLayoutMemory={setLayoutMemory}
+                        activeLayout={activeLayout} setActiveLayout={setActiveLayout}
                         machines={machines}
                         speedFactors={speedFactors}
                         complexityFactors={complexityFactors}

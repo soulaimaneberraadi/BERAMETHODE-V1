@@ -8,12 +8,18 @@ import {
   Search,
   Save,
   CheckCircle2,
-  CloudOff
+  CloudOff,
+  LogOut,
+  Shield
 } from 'lucide-react';
 import ModelWorkflow from './components/ModelWorkflow';
 import Library from './components/Library';
 import Machin from './components/Machin';
 import Profil from './components/Profil';
+import AdminDashboard from './src/components/AdminDashboard';
+import { useAuth } from './src/context/AuthContext';
+import Login from './src/components/Login';
+import Signup from './src/components/Signup';
 import { Machine, Operation, FicheData, Poste, SpeedFactor, ComplexityFactor, StandardTime, Guide, ModelData } from './types';
 
 // Default Data - UPDATED WITH EXCEL DATA
@@ -70,11 +76,20 @@ type HistoryState = {
 };
 
 export default function App() {
+  const { user, loading, logout } = useAuth();
+  const [authView, setAuthView] = useState<'login' | 'signup'>('login');
+  const [isGuest, setIsGuest] = useState(true);
+
   // --- STATE: NAVIGATION ---
-  const [currentView, setCurrentView] = useState<'atelier' | 'library' | 'config' | 'profil'>('atelier');
+  const [currentView, setCurrentView] = useState<'atelier' | 'library' | 'config' | 'profil' | 'admin'>('atelier');
+
+  // --- STATE: LAYOUT MEMORY (Lifted Up) ---
+  const [layoutMemory, setLayoutMemory] = useState<Record<string, { id: string, x?: number, y?: number, isPlaced?: boolean, rotation?: number }[]>>({});
+  const [activeLayout, setActiveLayout] = useState<'zigzag' | 'snake' | 'grid' | 'wheat' | 'free' | 'line'>('zigzag'); // NEW: Track active layout
 
   // --- STATE: GLOBAL DATA (MACHINES & CONFIG) ---
   const [machines, setMachines] = useState<Machine[]>(DEFAULT_MACHINES);
+
   const [speedFactors, setSpeedFactors] = useState<SpeedFactor[]>([]);
   const [complexityFactors, setComplexityFactors] = useState<ComplexityFactor[]>([
       { id: '1', label: 'Simple', value: 1.0 },
@@ -190,6 +205,8 @@ export default function App() {
   
   const [ficheImages, setFicheImages] = useState<{ front: string | null; back: string | null }>({ front: null, back: null });
 
+
+
   // --- AUTO-SAVE LOGIC ---
   
   // 1. Load from LocalStorage on Mount
@@ -271,8 +288,19 @@ export default function App() {
   // --- LIBRARY STATE & PERSISTENCE ---
   const [models, setModels] = useState<ModelData[]>([]);
 
-  // 1. Load Library on Mount
+  // 1. Load Library on Mount (Server or Local)
   useEffect(() => {
+    if (user) {
+      // Load from Server
+      fetch('/api/models')
+        .then(res => {
+          if (res.ok) return res.json();
+          throw new Error('Failed to fetch models');
+        })
+        .then(data => setModels(data))
+        .catch(err => console.error(err));
+    } else {
+      // Load from LocalStorage (Guest)
       const savedLibrary = localStorage.getItem(LIBRARY_KEY);
       if (savedLibrary) {
           try {
@@ -284,21 +312,32 @@ export default function App() {
               console.error("Failed to load Library", e);
           }
       }
-  }, []);
+    }
+  }, [user]);
 
-  // 2. Persist Library on Change
+  // 2. Persist Library on Change (Server or Local)
+  // Note: For server, we usually save individually, but here we might need to refactor saveCurrentModel
+  // to call API directly instead of relying on this effect.
+  // For now, let's keep LocalStorage sync for Guest, and disable it for User (handled in saveCurrentModel)
   useEffect(() => {
-      if (models.length > 0) {
+      if (!user && models.length > 0) {
           try {
               localStorage.setItem(LIBRARY_KEY, JSON.stringify(models));
           } catch (e) {
               console.error("Failed to save Library (Quota?)", e);
-              // alert("Attention: La mémoire du navigateur est pleine. Certains modèles ne seront pas sauvegardés.");
           }
       }
-  }, [models]);
+  }, [models, user]);
 
   // --- ACTIONS ---
+  if (loading) return <div className="flex items-center justify-center h-screen">Loading...</div>;
+
+  if (!user && !isGuest) {
+    return authView === 'login' 
+      ? <Login onSwitch={() => setAuthView('signup')} onGuest={() => setIsGuest(true)} /> 
+      : <Signup onSwitch={() => setAuthView('login')} />;
+  }
+
   const handleSaveMachine = (m: Machine) => {
       setMachines(prev => {
           const exists = prev.find(item => item.id === m.id);
@@ -323,6 +362,17 @@ export default function App() {
       }
 
       // 2. PREPARE DATA
+      // Update layoutMemory with current postes state for the active layout
+      const currentLayoutSnapshot = postes.map(p => ({
+          id: p.id,
+          x: p.x,
+          y: p.y,
+          isPlaced: p.isPlaced,
+          rotation: p.rotation
+      }));
+      const updatedLayoutMemory = { ...layoutMemory, [activeLayout]: currentLayoutSnapshot };
+      setLayoutMemory(updatedLayoutMemory); // Update state as well
+
       // If updating, keep existing ID and date_creation. If new, generate.
       const modelToSave: ModelData = {
           id: currentModelId || Date.now().toString(),
@@ -342,27 +392,53 @@ export default function App() {
           gamme_operatoire: operations,
           implantation: {
               postes: postes,
-              assignments: assignments
+              assignments: assignments,
+              layoutMemory: updatedLayoutMemory,
+              activeLayout: activeLayout
           }
       };
 
       // 3. UPDATE OR ADD
-      setModels(prev => {
-          if (currentModelId) {
-              // Update existing model in library
-              return prev.map(m => m.id === currentModelId ? modelToSave : m);
-          } else {
-              // Add new model to top of library
-              return [modelToSave, ...prev];
-          }
-      });
-
-      // 4. SET CURRENT ID (if it was new)
-      setCurrentModelId(modelToSave.id);
-
-      // 5. REDIRECT TO LIBRARY
-      alert("Modèle sauvegardé avec succès !");
-      setCurrentView('library');
+      if (user) {
+        // Save to Server
+        fetch('/api/models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(modelToSave)
+        })
+        .then(res => {
+          if (!res.ok) throw new Error('Failed to save to server');
+          return res.json();
+        })
+        .then(() => {
+           setModels(prev => {
+              if (currentModelId) {
+                  return prev.map(m => m.id === currentModelId ? modelToSave : m);
+              } else {
+                  return [modelToSave, ...prev];
+              }
+           });
+           setCurrentModelId(modelToSave.id);
+           alert("Modèle sauvegardé avec succès (Cloud) !");
+           setCurrentView('library');
+        })
+        .catch(err => {
+          console.error(err);
+          alert("Erreur lors de la sauvegarde sur le serveur.");
+        });
+      } else {
+        // Save to LocalStorage (Guest)
+        setModels(prev => {
+            if (currentModelId) {
+                return prev.map(m => m.id === currentModelId ? modelToSave : m);
+            } else {
+                return [modelToSave, ...prev];
+            }
+        });
+        setCurrentModelId(modelToSave.id);
+        alert("Modèle sauvegardé avec succès (Local) !");
+        setCurrentView('library');
+      }
   };
 
   const loadModel = (model: ModelData) => {
@@ -419,9 +495,19 @@ export default function App() {
   };
 
   const deleteModel = (id: string) => {
-      setModels(prev => prev.filter(m => m.id !== id));
-      // If deleted model is open, reset current ID
-      if (currentModelId === id) setCurrentModelId(null);
+      if (user) {
+        fetch(`/api/models/${id}`, { method: 'DELETE' })
+          .then(res => {
+            if (res.ok) {
+               setModels(prev => prev.filter(m => m.id !== id));
+               if (currentModelId === id) setCurrentModelId(null);
+            }
+          })
+          .catch(err => console.error(err));
+      } else {
+        setModels(prev => prev.filter(m => m.id !== id));
+        if (currentModelId === id) setCurrentModelId(null);
+      }
   };
 
   const duplicateModel = (model: ModelData) => {
@@ -524,6 +610,20 @@ export default function App() {
                         <SettingsIcon className="w-3.5 h-3.5" />
                         Configuration
                     </button>
+                    
+                    {user?.role === 'admin' && (
+                        <button 
+                            onClick={() => setCurrentView('admin')} 
+                            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all text-[11px] font-bold uppercase tracking-wide whitespace-nowrap border ${
+                                currentView === 'admin' 
+                                ? 'bg-purple-50 border-purple-100 text-purple-700' 
+                                : 'bg-transparent border-transparent text-gray-500 hover:text-gray-900 hover:bg-gray-50'
+                            }`}
+                        >
+                            <Shield className="w-3.5 h-3.5" />
+                            Admin
+                        </button>
+                    )}
                 </nav>
 
                 {/* Right Side Tools */}
@@ -542,8 +642,16 @@ export default function App() {
                         }`}
                     >
                         <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-gray-700 to-gray-600 flex items-center justify-center text-[10px] font-bold text-white shadow-sm">
-                            SB
+                            {user?.name ? user.name.substring(0, 2).toUpperCase() : 'SB'}
                         </div>
+                    </button>
+
+                    <button
+                        onClick={logout}
+                        className="flex items-center justify-center w-8 h-8 rounded-full bg-white border border-gray-100 text-gray-400 hover:text-red-600 hover:border-red-100 transition-colors cursor-pointer"
+                        title="Logout"
+                    >
+                        <LogOut className="w-3.5 h-3.5" />
                     </button>
                 </div>
             </div>
@@ -630,6 +738,8 @@ export default function App() {
             )}
 
             {currentView === 'profil' && <Profil />}
+            
+            {currentView === 'admin' && user?.role === 'admin' && <AdminDashboard />}
         </main>
     </div>
   );
