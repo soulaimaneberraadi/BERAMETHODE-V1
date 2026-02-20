@@ -6,11 +6,17 @@ import nodemailer from 'nodemailer';
 
 const SECRET_KEY = process.env.JWT_SECRET || 'super-secret-key-change-this';
 
+const smtpPort = parseInt(process.env.SMTP_PORT || '465', 10);
+const smtpSecure =
+  process.env.SMTP_SECURE !== undefined
+    ? process.env.SMTP_SECURE === 'true'
+    : smtpPort === 465;
+
 // Configure Nodemailer Transporter
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || 'mail.yourdomain.com',
-  port: parseInt(process.env.SMTP_PORT || '465'),
-  secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
+  port: smtpPort,
+  secure: smtpSecure,
   auth: {
     user: process.env.SMTP_USER || 'no-reply@yourdomain.com',
     pass: process.env.SMTP_PASS || 'your_password_here',
